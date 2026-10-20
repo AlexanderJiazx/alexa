@@ -179,10 +179,37 @@ func (rt *Runtime) buildTools() []*tool {
 			func(tc *toolCtx, tab *browser.Tab, a map[string]any) (string, error) {
 				return fmt.Sprintf("Clicked at (%.0f, %.0f)", num(a, "x", 0), num(a, "y", 0)), tab.ClickXY(num(a, "x", 0), num(a, "y", 0), boolean(a, "double", false))
 			}),
-		browserTool("browser_type", "Type text into the element with the given index (focuses it first). Replaces existing text unless clear=false. Set submit=true to press Enter afterwards.",
+		browserTool("browser_type", "Type text into the element with the given index (focuses it first). Replaces existing text unless clear=false. Set submit=true to press Enter afterwards. "+
+			"Date, time and slider inputs get the value set directly: pass e.g. 2026-11-15, 19:30 or 4. The result says if the field ends up showing something else.",
 			map[string]any{"index": p("integer", "Element index (0 = currently focused element)"), "text": p("string", "Text to type"), "clear": p("boolean", "Clear existing value first (default true)"), "submit": p("boolean", "Press Enter after typing")}, []string{"index", "text"},
 			func(tc *toolCtx, tab *browser.Tab, a map[string]any) (string, error) {
-				return fmt.Sprintf("Typed into [%d]", int(num(a, "index", 0))), tab.Type(int(num(a, "index", 0)), str(a, "text"), boolean(a, "clear", true), boolean(a, "submit", false))
+				msg := fmt.Sprintf("Typed into [%d]", int(num(a, "index", 0)))
+				note, err := tab.Type(int(num(a, "index", 0)), str(a, "text"), boolean(a, "clear", true), boolean(a, "submit", false))
+				if note != "" {
+					msg += ". " + note
+				}
+				return msg, err
+			}),
+		browserTool("browser_hover", "Move the mouse over an element (by index) or a point (x, y), for menus and tooltips that only appear on hover.",
+			map[string]any{"index": p("integer", "Element index"), "x": p("number", "X in pixels (when there's no index)"), "y": p("number", "Y in pixels")}, nil,
+			func(tc *toolCtx, tab *browser.Tab, a map[string]any) (string, error) {
+				idx := int(num(a, "index", 0))
+				if idx > 0 {
+					return fmt.Sprintf("Hovering over [%d]", idx), tab.Hover(idx, 0, 0)
+				}
+				return fmt.Sprintf("Hovering at (%.0f, %.0f)", num(a, "x", 0), num(a, "y", 0)), tab.Hover(0, num(a, "x", 0), num(a, "y", 0))
+			}),
+		browserTool("browser_drag", "Drag from one element or point to another: drag and drop, reordering, sliders and handles. Give each end as an element index or as x/y coordinates; both ends must be in view.",
+			map[string]any{"from_index": p("integer", "Element to drag"), "from_x": p("number", "Start X (when there's no index)"), "from_y": p("number", "Start Y"),
+				"to_index": p("integer", "Element to drop on"), "to_x": p("number", "End X (when there's no index)"), "to_y": p("number", "End Y")}, nil,
+			func(tc *toolCtx, tab *browser.Tab, a map[string]any) (string, error) {
+				return "Dragged", tab.Drag(int(num(a, "from_index", 0)), num(a, "from_x", 0), num(a, "from_y", 0), int(num(a, "to_index", 0)), num(a, "to_x", 0), num(a, "to_y", 0))
+			}),
+		browserTool("browser_answer_dialog", "Answer the confirm or prompt dialog the page is showing (the browser state says when one is open; the page is frozen until it's answered). accept=true clicks OK, false clicks Cancel. For a prompt, text is what to type into it. "+
+			"A confirm can be consequential (\"Delete this?\"): check with the user first when it is.",
+			map[string]any{"accept": p("boolean", "true for OK, false for Cancel"), "text": p("string", "For a prompt: the text to enter")}, []string{"accept"},
+			func(tc *toolCtx, tab *browser.Tab, a map[string]any) (string, error) {
+				return tab.AnswerDialog(boolean(a, "accept", false), str(a, "text"))
 			}),
 		browserTool("browser_key", "Press a key or key combination in the browser, e.g. Enter, Escape, Tab, ArrowDown, PageDown, Control+a.",
 			map[string]any{"keys": p("string", "Key or combination")}, []string{"keys"},
@@ -328,11 +355,12 @@ func (rt *Runtime) buildTools() []*tool {
 			Run:         listFiles,
 		},
 		{
-			Name:        "read_file",
-			Description: "Read a text file from the workspace.",
-			Params:      map[string]any{"path": p("string", "File path"), "offset": p("integer", "Character offset")},
-			Required:    []string{"path"},
-			Run:         readFile,
+			Name: "read_file",
+			Description: "Read a file from the workspace. Text comes back as text (long files are paged: pass offset). Images (PNG, JPEG, GIF, WebP) are shown to you, so you can look at them, e.g. to check an image you generated. " +
+				"PDFs come back as text; pass page to see that page as an image (scans, charts, forms).",
+			Params:   map[string]any{"path": p("string", "File path"), "offset": p("integer", "Character offset"), "page": p("integer", "For a PDF: the page to look at, from 1")},
+			Required: []string{"path"},
+			Run:      readFile,
 		},
 		{
 			Name:        "write_file",
@@ -377,7 +405,7 @@ func (rt *Runtime) buildTools() []*tool {
 			Params: map[string]any{
 				"name":   p("string", "Short name, e.g. \"Morning briefing\""),
 				"prompt": p("string", "What to do each time it fires"),
-				"cron":   p("string", "Standard 5-field cron expression (minute hour day month weekday) for recurring runs, e.g. \"0 8 * * 1-5\""),
+				"cron":   p("string", "Standard 5-field cron expression (minute hour day month weekday) for recurring runs, e.g. \"0 8 * * 1-5\". As in any cron, if both day and weekday are set it runs on days matching either one"),
 				"run_at": p("string", "For a one-off run: local date-time like 2026-10-21T09:00 or RFC3339"),
 			},
 			Required: []string{"name", "prompt"},
@@ -411,7 +439,7 @@ func (rt *Runtime) buildTools() []*tool {
 	if rt.cfg.ShellEnabled {
 		tools = append(tools, &tool{
 			Name:        "run_shell",
-			Description: "Run a shell command (bash) in the workspace directory. Python 3, curl, jq, ffmpeg and common CLI tools are available. Use for calculations, data processing, converting/reading files (e.g. pdftotext), and generating documents. Not for browsing.",
+			Description: "Run a shell command (bash) in the workspace directory. " + shellTools() + " Use for calculations, data processing, charts, reading and converting files, and generating documents. Not for browsing.",
 			Params:      map[string]any{"command": p("string", "The bash command"), "timeout_seconds": p("integer", "Timeout (default 120, max 900)")},
 			Required:    []string{"command"},
 			Run:         runShell,
@@ -534,8 +562,11 @@ func readFile(tc *toolCtx, a map[string]any) (*toolResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if res, ok := readBinary(tc, full, data, int(num(a, "page", 0)), int(num(a, "offset", 0))); ok {
+		return res, nil
+	}
 	if !isText(data) {
-		return &toolResult{Text: fmt.Sprintf("%s is a binary file (%d bytes, %s). Use run_shell to process it (e.g. pdftotext).", str(a, "path"), len(data), mime.TypeByExtension(filepath.Ext(full)))}, nil
+		return &toolResult{Text: fmt.Sprintf("%s is a binary file (%d bytes, %s). Use run_shell to process it.", str(a, "path"), len(data), mime.TypeByExtension(filepath.Ext(full)))}, nil
 	}
 	off := int(num(a, "offset", 0))
 	if off > len(data) {
@@ -590,11 +621,17 @@ func runShell(tc *toolCtx, a map[string]any) (*toolResult, error) {
 	cmd.Dir = env.Workspace
 	cmd.Env = []string{
 		"HOME=" + env.Home,
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/homebrew/bin",
+		"PATH=" + shellPath,
 		"LANG=C.UTF-8",
 		"TZ=" + tc.run.user.Timezone,
 		"WORKSPACE=" + env.Workspace,
 		"MPLBACKEND=Agg",
+	}
+	// Commands reach the network the same way the server does.
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"} {
+		if v, ok := os.LookupEnv(k); ok {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if env.UID > 0 {
@@ -622,6 +659,51 @@ func runShell(tc *toolCtx, a map[string]any) (*toolResult, error) {
 		text = text[:15000] + "\n[…]\n" + text[len(text)-15000:]
 	}
 	return &toolResult{Text: fmt.Sprintf("exit code %d\n%s", code, text), Kind: "long"}, nil
+}
+
+const shellPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/homebrew/bin"
+
+// shellTools says what run_shell has to work with, so the model doesn't
+// plan around tools that aren't there. It's checked once at startup: the
+// image (or the machine) decides what's installed.
+func shellTools() string {
+	var have []string
+	if py := findTool("python3"); py != "" {
+		// Import names, and what to call them.
+		mods := [][2]string{{"matplotlib", "matplotlib"}, {"pandas", "pandas"}, {"numpy", "numpy"}, {"openpyxl", "openpyxl"},
+			{"docx", "python-docx"}, {"pypdf", "pypdf"}, {"PIL", "Pillow"}, {"bs4", "BeautifulSoup"}, {"requests", "requests"}}
+		args := []string{"-c", "import importlib.util as u, sys\nprint(' '.join(m for m in sys.argv[1:] if u.find_spec(m)))"}
+		for _, m := range mods {
+			args = append(args, m[0])
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		out, _ := exec.CommandContext(ctx, py, args...).Output()
+		found := map[string]bool{}
+		for _, m := range strings.Fields(string(out)) {
+			found[m] = true
+		}
+		var libs []string
+		for _, m := range mods {
+			if found[m[0]] {
+				libs = append(libs, m[1])
+			}
+		}
+		if len(libs) > 0 {
+			have = append(have, "Python 3 (with "+strings.Join(libs, ", ")+")")
+		} else {
+			have = append(have, "Python 3 (standard library only)")
+		}
+	}
+	for _, name := range []string{"ffmpeg", "pdftotext", "pdftoppm", "tesseract", "jq", "curl", "unzip", "zip"} {
+		if findTool(name) != "" {
+			have = append(have, name)
+		}
+	}
+	if len(have) == 0 {
+		return "Only basic shell utilities are installed."
+	}
+	return "Installed: " + strings.Join(have, ", ") + "."
 }
 
 type limitWriter struct {
@@ -673,8 +755,20 @@ func scheduleCreate(tc *toolCtx, a map[string]any) (*toolResult, error) {
 		return nil, err
 	}
 	tc.rt.sched.Reload(tc.ctx)
-	next := tc.rt.sched.NextRun(sc, tc.run.loc())
-	return &toolResult{Text: fmt.Sprintf("Created schedule %s (%q). Next run: %s.", sc.ID, sc.Name, next.In(tc.run.loc()).Format("Mon Jan 2 2006 15:04 MST"))}, nil
+	// Listing the next few runs lets the model check the schedule does what
+	// was asked.
+	var when []string
+	for _, t := range tc.rt.sched.NextRuns(sc, tc.run.loc(), 4) {
+		when = append(when, t.In(tc.run.loc()).Format("Mon Jan 2 2006 15:04 MST"))
+	}
+	msg := fmt.Sprintf("Created schedule %s (%q). Next run: %s.", sc.ID, sc.Name, strings.Join(when, ""))
+	if len(when) > 1 {
+		msg = fmt.Sprintf("Created schedule %s (%q). Next runs: %s.", sc.ID, sc.Name, strings.Join(when, "; "))
+	}
+	if w := cronDayWarning(sc.Cron); w != "" {
+		msg += " " + w
+	}
+	return &toolResult{Text: msg}, nil
 }
 
 func parseLocalTime(s string, loc *time.Location) (time.Time, error) {

@@ -3,7 +3,9 @@ package browser
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"html"
 	"image"
 	"image/color"
 	"image/draw"
@@ -17,6 +19,7 @@ import (
 	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
@@ -31,23 +34,49 @@ type State struct {
 	Screenshot []byte // annotated JPEG
 }
 
+type element struct {
+	D string  `json:"d"`
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	W float64 `json:"w"`
+	H float64 `json:"h"`
+}
+
+type frameBox struct {
+	X    float64 `json:"x"`
+	Y    float64 `json:"y"`
+	W    float64 `json:"w"`
+	H    float64 `json:"h"`
+	Clip struct {
+		L float64 `json:"l"`
+		T float64 `json:"t"`
+		R float64 `json:"r"`
+		B float64 `json:"b"`
+	} `json:"clip"`
+	Name string `json:"name"`
+	Src  string `json:"src"`
+}
+
 type indexResult struct {
-	Els []struct {
-		D string  `json:"d"`
-		X float64 `json:"x"`
-		Y float64 `json:"y"`
-		W float64 `json:"w"`
-		H float64 `json:"h"`
-	} `json:"els"`
-	Above   int    `json:"above"`
-	Below   int    `json:"below"`
-	ScrollY int    `json:"scrollY"`
-	ScrollH int    `json:"scrollH"`
-	VH      int    `json:"vh"`
-	VW      int    `json:"vw"`
-	Text    string `json:"text"`
-	Title   string `json:"title"`
-	URL     string `json:"url"`
+	Els     []element  `json:"els"`
+	Above   int        `json:"above"`
+	Below   int        `json:"below"`
+	ScrollY int        `json:"scrollY"`
+	ScrollH int        `json:"scrollH"`
+	VH      int        `json:"vh"`
+	VW      int        `json:"vw"`
+	Text    string     `json:"text"`
+	Title   string     `json:"title"`
+	URL     string     `json:"url"`
+	XFrames []frameBox `json:"xframes"` // cross-origin frames in view
+}
+
+// elemRef says where element [i] of the latest state lives.
+type elemRef struct {
+	frame *frameCtx // a cross-origin frame, or nil for the page (same-origin frames included)
+	xf    int       // that frame's position in the page's window.__aaXFrames
+	local int       // index in the window's __aaEls; -1 for a frame that couldn't be read
+	x, y  float64   // where such a frame was
 }
 
 func (t *Tab) begin() func() {
@@ -67,10 +96,26 @@ func (t *Tab) State() (*State, error) {
 }
 
 func (t *Tab) state() (*State, error) {
+	if d := t.pendingDialog(); d != nil {
+		// The page is paused: no scripts and no screenshot until it's answered.
+		u, title := t.URL()
+		return &State{URL: u, Title: title, Text: fmt.Sprintf("URL: %s\nTitle: %s\n\n%s\n", u, title, d.describe())}, nil
+	}
+	p := t.active()
 	var ix indexResult
-	if err := t.eval(indexJS, &ix); err != nil {
+	if err := t.eval(fmt.Sprintf("(%s)({})", indexFn), &ix); err != nil {
 		return nil, fmt.Errorf("read page: %w", err)
 	}
+	refs := make([]elemRef, len(ix.Els)+1)
+	for i := range ix.Els {
+		refs[i+1] = elemRef{local: i + 1}
+	}
+	if len(ix.XFrames) > 0 {
+		refs = t.indexFrames(p, &ix, refs)
+	}
+	t.mu.Lock()
+	t.elems, t.elemsPage = refs, p
+	t.mu.Unlock()
 	shot, err := t.screenshot(75)
 	if err != nil {
 		return nil, fmt.Errorf("screenshot: %w", err)
@@ -117,9 +162,42 @@ func (t *Tab) state() (*State, error) {
 	return &State{URL: ix.URL, Title: ix.Title, Text: b.String(), Screenshot: annotated}, nil
 }
 
+// ref finds element idx of the latest state.
+func (t *Tab) ref(idx int) (elemRef, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.elemsPage == nil {
+		return elemRef{local: idx}, nil // no state read yet: the page's own index
+	}
+	if t.elemsPage != t.activeLocked() || idx < 1 || idx >= len(t.elems) {
+		return elemRef{}, errNoElement
+	}
+	return t.elems[idx], nil
+}
+
+// evalAt runs body with el bound to element idx, in the frame it lives in.
+// body returns an object with ok:true, or nothing if el is gone.
+func (t *Tab) evalAt(idx int, body string, out any) error {
+	r, err := t.ref(idx)
+	if err != nil {
+		return err
+	}
+	if r.local < 0 {
+		return fmt.Errorf("element [%d] is an embedded frame that couldn't be read; click inside it by coordinates instead", idx)
+	}
+	js := fmt.Sprintf(`(() => { const el = (window.__aaEls||[])[%d]; if (!el || !el.isConnected) return {ok:false}; %s })()`, r.local, body)
+	if r.frame != nil {
+		return evalIn(r.frame.ctx, js, out)
+	}
+	return t.eval(js, out)
+}
+
 // Navigate opens a URL.
 func (t *Tab) Navigate(raw string) error {
 	defer t.begin()()
+	if err := t.blocked(); err != nil {
+		return err
+	}
 	u := strings.TrimSpace(raw)
 	if !strings.Contains(u, "://") && !strings.HasPrefix(u, "about:") {
 		if strings.Contains(u, ".") && !strings.Contains(u, " ") {
@@ -147,6 +225,9 @@ func (t *Tab) Navigate(raw string) error {
 
 func (t *Tab) Click(idx int) (string, error) {
 	defer t.begin()()
+	if err := t.blocked(); err != nil {
+		return "", err
+	}
 	x, y, tag, err := t.elementCenter(idx)
 	if err != nil {
 		return "", err
@@ -165,6 +246,9 @@ func (t *Tab) Click(idx int) (string, error) {
 
 func (t *Tab) ClickXY(x, y float64, double bool) error {
 	defer t.begin()()
+	if err := t.blocked(); err != nil {
+		return err
+	}
 	t.setCursor(x, y, true)
 	n := int64(1)
 	if double {
@@ -177,46 +261,154 @@ func (t *Tab) ClickXY(x, y float64, double bool) error {
 	return nil
 }
 
+// Input types whose value can't be typed as text (Chrome's insertText
+// leaves them empty), with the format they take instead.
+var valueInputs = map[string]string{
+	"date": "YYYY-MM-DD", "time": "HH:MM (24-hour)", "datetime-local": "YYYY-MM-DDTHH:MM",
+	"month": "YYYY-MM", "week": "YYYY-Www", "color": "#rrggbb", "range": "a number within its min and max",
+}
+
 // Type focuses element idx (if >0), optionally clears it, types text and
-// optionally presses Enter.
-func (t *Tab) Type(idx int, text string, clear, submit bool) error {
+// optionally presses Enter. Date, time, slider and similar fields get their
+// value set directly. It returns a note when the field doesn't end up
+// showing what was typed.
+func (t *Tab) Type(idx int, text string, clear, submit bool) (string, error) {
 	defer t.begin()()
+	if err := t.blocked(); err != nil {
+		return "", err
+	}
 	if idx > 0 {
+		var info struct {
+			OK   bool   `json:"ok"`
+			Tag  string `json:"tag"`
+			Type string `json:"type"`
+		}
+		if r, err := t.ref(idx); err == nil && r.local > 0 {
+			if err := t.evalAt(idx, `return {ok: true, tag: el.tagName.toLowerCase(), type: (el.type || '').toLowerCase()};`, &info); err != nil {
+				return "", err
+			}
+			if !info.OK {
+				return "", errNoElement
+			}
+		}
+		if info.Tag == "select" {
+			return "", fmt.Errorf("element [%d] is a dropdown <select>; use browser_select with the option text instead", idx)
+		}
+		if hint, ok := valueInputs[info.Type]; ok && info.Tag == "input" {
+			return t.setValue(idx, info.Type, hint, text, submit)
+		}
 		x, y, _, err := t.elementCenter(idx)
 		if err != nil {
-			return err
+			return "", err
 		}
 		t.setCursor(x, y, true)
 		if err := t.mouseClick(x, y, input.Left, 1); err != nil {
-			return err
+			return "", err
 		}
 		time.Sleep(150 * time.Millisecond)
 		if clear {
-			var ok bool
-			_ = t.eval(fmt.Sprintf(`(() => { const el = (window.__aaEls||[])[%d]; const a = document.activeElement || el;
-				if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) { a.select(); return true; }
-				if (a && a.isContentEditable) { document.execCommand('selectAll'); return true; } return false; })()`, idx), &ok)
-			if ok {
-				_ = t.pressKey("Backspace", 0)
+			var res struct {
+				OK bool `json:"ok"`
+			}
+			_ = t.evalAt(idx, `const doc = el.ownerDocument, a = doc.activeElement && doc.activeElement !== doc.body ? doc.activeElement : el;
+				if (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA') { a.select(); return {ok: true}; }
+				if (a.isContentEditable) { doc.execCommand('selectAll'); return {ok: true}; } return {ok: false};`, &res)
+			if res.OK {
+				_ = t.input(10*time.Second, keyPress("Backspace", 0))
 			}
 		}
 	}
-	if err := t.run(20*time.Second, input.InsertText(text)); err != nil {
-		return err
+	if err := t.input(20*time.Second, input.InsertText(text)); err != nil {
+		return "", err
 	}
 	if submit {
 		time.Sleep(150 * time.Millisecond)
-		if err := t.pressKey("Enter", 0); err != nil {
-			return err
+		if err := t.input(10*time.Second, keyPress("Enter", 0)); err != nil {
+			return "", err
 		}
 	}
 	t.settle()
-	return nil
+	if idx <= 0 || submit || t.pendingDialog() != nil {
+		return "", nil
+	}
+	// Masks, autocomplete and length limits can change what was typed.
+	var got struct {
+		OK    bool   `json:"ok"`
+		Value string `json:"value"`
+	}
+	_ = t.evalAt(idx, `if (el.type === 'password') return {ok: false};
+		const v = el.isContentEditable ? el.innerText : el.value;
+		return typeof v === 'string' ? {ok: true, value: v} : {ok: false};`, &got)
+	if got.OK && !strings.Contains(strings.Join(strings.Fields(got.Value), " "), strings.Join(strings.Fields(text), " ")) {
+		return fmt.Sprintf("Note: the field now shows %q, not exactly what was typed.", trimText(got.Value, 120)), nil
+	}
+	return "", nil
+}
+
+// setValue sets a date, time, slider or similar input the way a person's
+// picking would, firing the events pages listen for.
+func (t *Tab) setValue(idx int, typ, hint, text string, submit bool) (string, error) {
+	v := normalizeValue(typ, text)
+	var res struct {
+		OK    bool   `json:"ok"`
+		Value string `json:"value"`
+	}
+	err := t.evalAt(idx, fmt.Sprintf(`el.scrollIntoView({block: 'center', behavior: 'instant'});
+		el.focus();
+		const set = Object.getOwnPropertyDescriptor(el.ownerDocument.defaultView.HTMLInputElement.prototype, 'value').set;
+		set.call(el, %s);
+		el.dispatchEvent(new Event('input', {bubbles: true}));
+		el.dispatchEvent(new Event('change', {bubbles: true}));
+		return {ok: true, value: el.value};`, jsString(v)), &res)
+	if err != nil {
+		return "", err
+	}
+	if !res.OK {
+		return "", errNoElement
+	}
+	if res.Value == "" && v != "" {
+		return "", fmt.Errorf("the %s field didn't accept %q; give it as %s", typ, text, hint)
+	}
+	if submit {
+		if err := t.input(10*time.Second, keyPress("Enter", 0)); err != nil {
+			return "", err
+		}
+	}
+	t.settle()
+	return fmt.Sprintf("The %s field now holds %s.", typ, res.Value), nil
+}
+
+// normalizeValue turns common ways of writing a date or time into the form
+// the input takes. Anything else is passed on as it is.
+func normalizeValue(typ, v string) string {
+	v = strings.TrimSpace(v)
+	try := func(out string, layouts ...string) string {
+		for _, l := range layouts {
+			if t, err := time.Parse(l, v); err == nil {
+				return t.Format(out)
+			}
+		}
+		return v
+	}
+	switch typ {
+	case "date":
+		return try("2006-01-02", "2006-01-02", "2006/01/02", "January 2, 2006", "Jan 2, 2006", "2 January 2006", "2 Jan 2006", "Monday, January 2, 2006", "Mon, Jan 2, 2006")
+	case "time":
+		return try("15:04", "15:04", "15:04:05", "3:04 PM", "3:04PM", "3:04 pm", "3:04pm", "3 PM", "3PM", "3 pm", "3pm")
+	case "datetime-local":
+		return try("2006-01-02T15:04", "2006-01-02T15:04", "2006-01-02 15:04", "2006-01-02T15:04:05", "2006-01-02 3:04 PM", "2006-01-02 3:04 pm")
+	case "month":
+		return try("2006-01", "2006-01", "January 2006", "Jan 2006", "2006/01")
+	}
+	return v
 }
 
 // Keys presses a key combination like "Enter", "Escape", "Control+a".
 func (t *Tab) Keys(combo string) error {
 	defer t.begin()()
+	if err := t.blocked(); err != nil {
+		return err
+	}
 	parts := strings.Split(combo, "+")
 	var mods int64
 	for _, p := range parts[:len(parts)-1] {
@@ -231,16 +423,17 @@ func (t *Tab) Keys(combo string) error {
 			mods |= 8
 		}
 	}
-	if err := t.pressKey(strings.TrimSpace(parts[len(parts)-1]), mods); err != nil {
+	if err := t.input(10*time.Second, keyPress(strings.TrimSpace(parts[len(parts)-1]), mods)); err != nil {
 		return err
 	}
 	t.settle()
 	return nil
 }
 
-func (t *Tab) pressKey(key string, mods int64) error {
+// keyPress presses and releases a key.
+func keyPress(key string, mods int64) chromedp.Action {
 	k := lookupKey(key)
-	return t.run(10*time.Second, chromedp.ActionFunc(func(ctx context.Context) error {
+	return chromedp.ActionFunc(func(ctx context.Context) error {
 		down := input.DispatchKeyEvent(input.KeyRawDown).WithKey(k.key).WithCode(k.code).WithWindowsVirtualKeyCode(k.vk).WithNativeVirtualKeyCode(k.vk).WithModifiers(input.Modifier(mods))
 		if k.text != "" && mods&^8 == 0 {
 			down = input.DispatchKeyEvent(input.KeyDown).WithKey(k.key).WithCode(k.code).WithWindowsVirtualKeyCode(k.vk).WithNativeVirtualKeyCode(k.vk).WithText(k.text).WithUnmodifiedText(k.text).WithModifiers(input.Modifier(mods))
@@ -249,26 +442,23 @@ func (t *Tab) pressKey(key string, mods int64) error {
 			return err
 		}
 		return input.DispatchKeyEvent(input.KeyUp).WithKey(k.key).WithCode(k.code).WithWindowsVirtualKeyCode(k.vk).WithNativeVirtualKeyCode(k.vk).WithModifiers(input.Modifier(mods)).Do(ctx)
-	}))
+	})
 }
 
 // Scroll scrolls the page (or the scrollable area under element idx).
 func (t *Tab) Scroll(direction string, pages float64, idx int) error {
 	defer t.begin()()
+	if err := t.blocked(); err != nil {
+		return err
+	}
 	if pages <= 0 {
 		pages = 0.8
 	}
 	w, h := float64(t.b.mgr.opts.Width), float64(t.b.mgr.opts.Height)
 	x, y := w/2, h/2
 	if idx > 0 {
-		var r struct {
-			OK bool    `json:"ok"`
-			X  float64 `json:"x"`
-			Y  float64 `json:"y"`
-		}
-		_ = t.eval(fmt.Sprintf(`(() => { const el = (window.__aaEls||[])[%d]; if (!el) return {ok:false}; const r = el.getBoundingClientRect(); return {ok:true, x: r.left + r.width/2, y: r.top + r.height/2}; })()`, idx), &r)
-		if r.OK {
-			x, y = r.X, r.Y
+		if cx, cy, _, err := t.elementCenter(idx); err == nil {
+			x, y = cx, cy
 		}
 	}
 	dx, dy := 0.0, 0.0
@@ -286,7 +476,7 @@ func (t *Tab) Scroll(direction string, pages float64, idx int) error {
 	default:
 		dy = h * pages
 	}
-	if err := t.run(10*time.Second, input.DispatchMouseEvent(input.MouseWheel, x, y).WithDeltaX(dx).WithDeltaY(dy)); err != nil {
+	if err := t.input(10*time.Second, input.DispatchMouseEvent(input.MouseWheel, x, y).WithDeltaX(dx).WithDeltaY(dy)); err != nil {
 		return err
 	}
 	time.Sleep(500 * time.Millisecond)
@@ -305,42 +495,87 @@ func (t *Tab) evalSettle(js string) error {
 // Select chooses an option (by visible text or value) in a <select>.
 func (t *Tab) Select(idx int, option string) (string, error) {
 	defer t.begin()()
+	if err := t.blocked(); err != nil {
+		return "", err
+	}
 	var res struct {
 		OK  bool   `json:"ok"`
 		Msg string `json:"msg"`
 	}
-	js := fmt.Sprintf(`(() => {
-		const el = (window.__aaEls||[])[%d];
-		if (!el) return {ok:false, msg:'element not found'};
-		if (el.tagName !== 'SELECT') return {ok:false, msg:'element is not a <select>; click it and pick the option instead'};
+	body := fmt.Sprintf(`if (el.tagName !== 'SELECT') return {ok:false, msg:'element is not a <select>; click it and pick the option instead'};
 		const want = %s.toLowerCase().trim();
 		let opt = Array.from(el.options).find(o => o.text.trim().toLowerCase() === want || o.value.toLowerCase() === want)
 			|| Array.from(el.options).find(o => o.text.toLowerCase().includes(want));
 		if (!opt) return {ok:false, msg:'no option matching; options are: ' + Array.from(el.options).map(o => o.text.trim()).join(' | ')};
 		el.focus();
-		const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set;
+		const setter = Object.getOwnPropertyDescriptor(el.ownerDocument.defaultView.HTMLSelectElement.prototype, 'value').set;
 		setter.call(el, opt.value);
 		el.dispatchEvent(new Event('input', {bubbles:true}));
 		el.dispatchEvent(new Event('change', {bubbles:true}));
-		return {ok:true, msg: opt.text.trim()};
-	})()`, idx, jsString(option))
-	if err := t.eval(js, &res); err != nil {
+		return {ok:true, msg: opt.text.trim()};`, jsString(option))
+	if err := t.evalAt(idx, body, &res); err != nil {
 		return "", err
 	}
 	if !res.OK {
+		if res.Msg == "" {
+			return "", errNoElement
+		}
 		return "", fmt.Errorf("%s", res.Msg)
 	}
 	t.settle()
 	return res.Msg, nil
 }
 
+// Upload sets the files of element idx's file input: the element itself, or
+// the one its button, label or form belongs to (they're often hidden).
 func (t *Tab) Upload(idx int, paths []string) error {
 	defer t.begin()()
-	node, err := t.fileInputNode(idx)
+	if err := t.blocked(); err != nil {
+		return err
+	}
+	r, err := t.ref(idx)
 	if err != nil {
 		return err
 	}
-	if err := t.run(15*time.Second, dom.SetFileInputFiles(paths).WithNodeID(node)); err != nil {
+	if r.local < 0 {
+		return fmt.Errorf("element [%d] is an embedded frame that couldn't be read", idx)
+	}
+	ctx := t.active().ctx
+	if r.frame != nil {
+		ctx = r.frame.ctx
+	}
+	c, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	err = chromedp.Run(c, chromedp.ActionFunc(func(ctx context.Context) error {
+		obj, exc, err := runtime.Evaluate(fmt.Sprintf(`(() => {
+			const el = (window.__aaEls||[])[%d];
+			if (!el) return null;
+			const isFile = e => e && e.tagName === 'INPUT' && e.type === 'file';
+			if (isFile(el)) return el;
+			const lab = el.closest && el.closest('label');
+			const form = el.closest && el.closest('form');
+			const near = (el.querySelector && el.querySelector('input[type=file]')) || (lab && isFile(lab.control) ? lab.control : null)
+				|| (form && form.querySelector('input[type=file]'));
+			if (near) return near;
+			const all = el.ownerDocument.querySelectorAll('input[type=file]');
+			return all.length === 1 ? all[0] : null;
+		})()`, r.local)).Do(ctx)
+		if err != nil {
+			return err
+		}
+		if exc != nil || obj == nil || obj.ObjectID == "" {
+			return errors.New("no file input found there; use the index of the file input or of its upload button")
+		}
+		if _, err := dom.GetDocument().Do(ctx); err != nil {
+			return err
+		}
+		nodeID, err := dom.RequestNode(obj.ObjectID).Do(ctx)
+		if err != nil {
+			return err
+		}
+		return dom.SetFileInputFiles(paths).WithNodeID(nodeID).Do(ctx)
+	}))
+	if err != nil {
 		return err
 	}
 	t.settle()
@@ -349,6 +584,9 @@ func (t *Tab) Upload(idx int, paths []string) error {
 
 func (t *Tab) History(delta int) error {
 	defer t.begin()()
+	if err := t.blocked(); err != nil {
+		return err
+	}
 	err := t.run(10*time.Second, chromedp.ActionFunc(func(ctx context.Context) error {
 		cur, entries, err := page.GetNavigationHistory().Do(ctx)
 		if err != nil {
@@ -369,6 +607,9 @@ func (t *Tab) History(delta int) error {
 
 func (t *Tab) Reload() error {
 	defer t.begin()()
+	if err := t.blocked(); err != nil {
+		return err
+	}
 	if err := t.run(30*time.Second, chromedp.Reload()); err != nil {
 		return err
 	}
@@ -376,18 +617,40 @@ func (t *Tab) Reload() error {
 	return nil
 }
 
-// Read returns the page content as markdown (paged by character offset).
+// Read returns the page content as markdown (paged by character offset),
+// including what's in its frames.
 func (t *Tab) Read(offset, limit int) (string, int, error) {
 	defer t.begin()()
-	var html string
-	if err := t.eval(`(() => { const c = document.body ? document.body.cloneNode(true) : document.documentElement.cloneNode(true);
-		c.querySelectorAll('script,style,noscript,svg,iframe,template,link,meta').forEach(e => e.remove());
-		return c.innerHTML; })()`, &html); err != nil {
+	if err := t.blocked(); err != nil {
 		return "", 0, err
 	}
-	md, err := htmltomd.ConvertString(html)
+	p := t.active()
+	var res struct {
+		HTML string   `json:"html"`
+		XSrc []string `json:"xsrc"`
+	}
+	if err := t.eval(fmt.Sprintf("(%s)({frames: true})", readFn), &res); err != nil {
+		return "", 0, err
+	}
+	doc := res.HTML
+	if len(res.XSrc) > 0 {
+		frames := t.crossFrames(p, "__aaReadXF", len(res.XSrc))
+		for k, src := range res.XSrc {
+			repl := "<p>[An embedded frame from " + html.EscapeString(src) + " that couldn't be read]</p>"
+			if f := frames[k]; f != nil {
+				var fr struct {
+					HTML string `json:"html"`
+				}
+				if err := evalIn(f.ctx, fmt.Sprintf("(%s)({})", readFn), &fr); err == nil {
+					repl = "<p><em>[Embedded frame: " + html.EscapeString(src) + "]</em></p>" + fr.HTML
+				}
+			}
+			doc = strings.Replace(doc, fmt.Sprintf("[[AA-XFRAME-%d]]", k), repl, 1)
+		}
+	}
+	md, err := htmltomd.ConvertString(doc)
 	if err != nil {
-		md = html
+		md = doc
 	}
 	md = collapseBlank(md)
 	total := len(md)
@@ -408,6 +671,136 @@ func (t *Tab) Eval(js string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%v", out), nil
+}
+
+// Hover moves the mouse over element idx (or to x, y when idx is 0), for
+// menus and tooltips that open on hover.
+func (t *Tab) Hover(idx int, x, y float64) error {
+	defer t.begin()()
+	if err := t.blocked(); err != nil {
+		return err
+	}
+	if idx > 0 {
+		var err error
+		if x, y, _, err = t.elementCenter(idx); err != nil {
+			return err
+		}
+	}
+	t.setCursor(x, y, false)
+	if err := t.input(10*time.Second, input.DispatchMouseEvent(input.MouseMoved, x, y)); err != nil {
+		return err
+	}
+	time.Sleep(500 * time.Millisecond)
+	return nil
+}
+
+// Drag presses the mouse on one point (element fromIdx, or fx, fy), moves it
+// to another in steps and releases it there: for sliders, reordering and
+// drag and drop. A native HTML5 drag doesn't start from synthetic mouse
+// events alone, so it's intercepted and finished with drag events.
+func (t *Tab) Drag(fromIdx int, fx, fy float64, toIdx int, tx, ty float64) error {
+	defer t.begin()()
+	if err := t.blocked(); err != nil {
+		return err
+	}
+	var err error
+	if fromIdx > 0 {
+		if fx, fy, _, err = t.elementCenter(fromIdx); err != nil {
+			return fmt.Errorf("start: %w", err)
+		}
+	}
+	if toIdx > 0 {
+		if tx, ty, _, err = t.elementCenter(toIdx); err != nil {
+			return fmt.Errorf("end: %w", err)
+		}
+	}
+	w, h := float64(t.b.mgr.opts.Width), float64(t.b.mgr.opts.Height)
+	if tx < 0 || ty < 0 || tx > w || ty > h {
+		return errors.New("the end point is out of view; scroll so both ends are visible first")
+	}
+	p := t.active()
+	got := make(chan *input.DragData, 1)
+	lctx, lcancel := context.WithCancel(p.ctx)
+	defer lcancel()
+	chromedp.ListenTarget(lctx, func(ev any) {
+		if e, ok := ev.(*input.EventDragIntercepted); ok {
+			select {
+			case got <- e.Data:
+			default:
+			}
+		}
+	})
+	_ = t.run(5*time.Second, input.SetInterceptDrags(true))
+	defer func() { _ = t.run(5*time.Second, input.SetInterceptDrags(false)) }()
+	t.setCursor(fx, fy, false)
+	const steps = 12
+	err = t.input(20*time.Second, chromedp.ActionFunc(func(ctx context.Context) error {
+		if err := input.DispatchMouseEvent(input.MouseMoved, fx, fy).Do(ctx); err != nil {
+			return err
+		}
+		if err := input.DispatchMouseEvent(input.MousePressed, fx, fy).WithButton(input.Left).WithButtons(1).WithClickCount(1).Do(ctx); err != nil {
+			return err
+		}
+		for i := 1; i <= steps; i++ {
+			x, y := fx+(tx-fx)*float64(i)/steps, fy+(ty-fy)*float64(i)/steps
+			if err := input.DispatchMouseEvent(input.MouseMoved, x, y).WithButton(input.Left).WithButtons(1).Do(ctx); err != nil {
+				return err
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		return nil
+	}))
+	if err != nil {
+		return err
+	}
+	var data *input.DragData
+	select {
+	case data = <-got:
+	case <-time.After(250 * time.Millisecond):
+	}
+	t.setCursor(tx, ty, true)
+	err = t.input(10*time.Second, chromedp.ActionFunc(func(ctx context.Context) error {
+		if data != nil {
+			for _, typ := range []input.DispatchDragEventType{input.DragEnter, input.DragOver, input.Drop} {
+				if err := input.DispatchDragEvent(typ, tx, ty, data).Do(ctx); err != nil {
+					return err
+				}
+			}
+		}
+		return input.DispatchMouseEvent(input.MouseReleased, tx, ty).WithButton(input.Left).WithButtons(0).WithClickCount(1).Do(ctx)
+	}))
+	t.settle()
+	return err
+}
+
+// AnswerDialog accepts or dismisses the confirm or prompt dialog the page is
+// waiting on, typing text into a prompt first.
+func (t *Tab) AnswerDialog(accept bool, text string) (string, error) {
+	defer t.begin()()
+	d := t.pendingDialog()
+	if d == nil {
+		return "", errors.New("no dialog is open")
+	}
+	if err := t.answer(d, accept, text); err != nil {
+		return "", err
+	}
+	t.settle()
+	msg := "Dismissed the " + d.Type + " dialog."
+	if accept {
+		msg = "Accepted the " + d.Type + " dialog."
+		if d.Type == "prompt" {
+			msg = fmt.Sprintf("Answered the prompt with %q.", text)
+		}
+	}
+	return msg, nil
+}
+
+func trimText(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
 }
 
 func collapseBlank(s string) string {
@@ -449,6 +842,14 @@ type HumanInput struct {
 // Human applies an input event from a person controlling the browser.
 func (t *Tab) Human(ev HumanInput) error {
 	t.b.touch()
+	t.mu.Lock()
+	t.humanAt = time.Now()
+	t.mu.Unlock()
+	// A dialog the agent left open: they can't see it, and the page ignores
+	// them until it's answered.
+	if d := t.pendingDialog(); d != nil {
+		_ = t.answer(d, false, "")
+	}
 	btn := input.Left
 	switch ev.Button {
 	case "right":

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
@@ -26,6 +25,7 @@ type pageCtx struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	tid    target.ID
+	frames map[target.ID]*frameCtx // attached cross-origin frames
 }
 
 // Tab is one task's browsing context (plus any popups it opened).
@@ -34,16 +34,21 @@ type Tab struct {
 	taskID string
 	ctx    context.Context // lifetime of the tab (first page)
 
-	mu        sync.Mutex
-	pages     []*pageCtx // stack: last is active
-	subs      map[chan []byte]struct{}
-	lastFrame []byte
-	casting   *pageCtx
-	url       string
-	title     string
-	cursorX   float64
-	cursorY   float64
-	dialogs   []string
+	mu         sync.Mutex
+	pages      []*pageCtx // stack: last is active
+	subs       map[chan []byte]struct{}
+	lastFrame  []byte
+	casting    *pageCtx
+	url        string
+	title      string
+	cursorX    float64
+	cursorY    float64
+	dialogs    []string      // auto-accepted alerts, reported once
+	dialog     *dialog       // a confirm/prompt waiting for the agent
+	dialogWait chan struct{} // closed when a dialog opens during input
+	humanAt    time.Time     // last input from a person in control
+	elems      []elemRef     // where each element of the latest state lives
+	elemsPage  *pageCtx      // the page that state was read from
 
 	actMu sync.Mutex // serializes actions
 	busyN atomic.Int32
@@ -118,12 +123,7 @@ func (t *Tab) setupPage(p *pageCtx) error {
 				}
 			}
 		case *page.EventJavascriptDialogOpening:
-			t.mu.Lock()
-			t.dialogs = append(t.dialogs, fmt.Sprintf("%s dialog: %q", e.Type, e.Message))
-			t.mu.Unlock()
-			go func() {
-				_ = chromedp.Run(pctx, page.HandleJavaScriptDialog(true))
-			}()
+			t.onDialog(pctx, e)
 		case *target.EventTargetDestroyed, *target.EventDetachedFromTarget:
 			go t.popClosed()
 		}
@@ -345,6 +345,10 @@ func (t *Tab) run(timeout time.Duration, actions ...chromedp.Action) error {
 
 // eval evaluates JS (retrying across navigations) and decodes into out.
 func (t *Tab) eval(js string, out any) error {
+	// Scripts don't run while a dialog holds the page.
+	if err := t.blocked(); err != nil {
+		return err
+	}
 	var err error
 	for i := 0; i < 4; i++ {
 		err = t.run(15*time.Second, chromedp.Evaluate(js, out, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
@@ -378,6 +382,9 @@ func (t *Tab) settle() {
 	time.Sleep(350 * time.Millisecond)
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
+		if t.pendingDialog() != nil {
+			return
+		}
 		var state string
 		ctx, cancel := context.WithTimeout(t.active().ctx, 2*time.Second)
 		err := chromedp.Run(ctx, chromedp.Evaluate(`document.readyState`, &state))
@@ -398,7 +405,7 @@ func (t *Tab) setCursor(x, y float64, click bool) {
 }
 
 func (t *Tab) mouseClick(x, y float64, button input.MouseButton, count int64) error {
-	return t.run(10*time.Second, chromedp.ActionFunc(func(ctx context.Context) error {
+	return t.input(10*time.Second, chromedp.ActionFunc(func(ctx context.Context) error {
 		if err := input.DispatchMouseEvent(input.MouseMoved, x, y).Do(ctx); err != nil {
 			return err
 		}
@@ -416,50 +423,70 @@ func (t *Tab) mouseClick(x, y float64, button input.MouseButton, count int64) er
 
 var errNoElement = errors.New("element not found; the page may have changed — get a fresh browser state and use a current index")
 
-// elementCenter scrolls element [idx] into view and returns its center.
+// elementCenter scrolls element [idx] into view and returns a click point in
+// page (top-level viewport) coordinates, following the element into whatever
+// frame it lives in, plus a tag like "input:date".
 func (t *Tab) elementCenter(idx int) (float64, float64, string, error) {
+	r, err := t.ref(idx)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	if r.local < 0 { // a frame we couldn't read: its stored center
+		return r.x, r.y, "iframe", nil
+	}
 	var res struct {
 		OK  bool    `json:"ok"`
 		X   float64 `json:"x"`
 		Y   float64 `json:"y"`
+		W   float64 `json:"w"`
+		H   float64 `json:"h"`
 		Tag string  `json:"tag"`
 	}
 	js := fmt.Sprintf(`(() => {
 		const el = (window.__aaEls||[])[%d];
 		if (!el || !el.isConnected) return {ok:false};
 		el.scrollIntoView({block:'center', inline:'center', behavior:'instant'});
-		const r = el.getBoundingClientRect();
-		const x = Math.min(Math.max(r.left + Math.min(r.width/2, 120), 1), innerWidth-1);
-		const y = Math.min(Math.max(r.top + r.height/2, 1), innerHeight-1);
-		return {ok:true, x, y, tag: el.tagName.toLowerCase() + (el.type ? ':' + el.type : '')};
-	})()`, idx)
-	if err := t.eval(js, &res); err != nil {
+		const a = (window.__aaAbs || (e => { const r = e.getBoundingClientRect(); return {x:r.left,y:r.top,w:r.width,h:r.height}; }))(el);
+		return {ok:true, x:a.x, y:a.y, w:a.w, h:a.h, tag: el.tagName.toLowerCase() + (el.type ? ':' + el.type : '')};
+	})()`, r.local)
+	if r.frame != nil {
+		err = evalIn(r.frame.ctx, js, &res)
+	} else {
+		err = t.eval(js, &res)
+	}
+	if err != nil {
 		return 0, 0, "", err
 	}
 	if !res.OK {
 		return 0, 0, "", errNoElement
 	}
-	return res.X, res.Y, res.Tag, nil
-}
-
-// fileInputNode resolves element [idx] to a DOM node id for file uploads.
-func (t *Tab) fileInputNode(idx int) (cdp.NodeID, error) {
-	var nodeID cdp.NodeID
-	err := t.run(10*time.Second, chromedp.ActionFunc(func(ctx context.Context) error {
-		obj, exc, err := runtime.Evaluate(fmt.Sprintf(`(window.__aaEls||[])[%d] || null`, idx)).Do(ctx)
-		if err != nil {
-			return err
+	lx, ly := res.X+min(res.W/2, 120), res.Y+res.H/2
+	if r.frame != nil {
+		// Where the frame is now (scrolling in it can scroll the page),
+		// bringing the point into view if the frame is partly off screen.
+		var o struct {
+			OK bool    `json:"ok"`
+			X  float64 `json:"x"`
+			Y  float64 `json:"y"`
 		}
-		if exc != nil || obj == nil || obj.ObjectID == "" {
-			return errNoElement
+		js := fmt.Sprintf(`(() => {
+			const fr = (window.__aaXFrames||[])[%d];
+			if (!fr || !fr.isConnected || !window.__aaAbs) return {ok:false};
+			const origin = () => { const a = window.__aaAbs(fr), st = fr.ownerDocument.defaultView.getComputedStyle(fr);
+				return {x: a.x + fr.clientLeft + (parseFloat(st.paddingLeft)||0), y: a.y + fr.clientTop + (parseFloat(st.paddingTop)||0)}; };
+			let o = origin();
+			const y = o.y + %f;
+			if (y < 0 || y > innerHeight) { window.scrollBy(0, y - innerHeight / 2); o = origin(); }
+			return {ok:true, x: o.x, y: o.y};
+		})()`, r.xf, ly)
+		if err := t.eval(js, &o); err == nil && o.OK {
+			lx, ly = lx+o.X, ly+o.Y
+		} else {
+			lx, ly = lx+r.x, ly+r.y // where it was at the last state
 		}
-		if _, err := dom.GetDocument().Do(ctx); err != nil {
-			return err
-		}
-		nodeID, err = dom.RequestNode(obj.ObjectID).Do(ctx)
-		return err
-	}))
-	return nodeID, err
+	}
+	w, h := float64(t.b.mgr.opts.Width), float64(t.b.mgr.opts.Height)
+	return min(max(lx, 1), w-1), min(max(ly, 1), h-1), res.Tag, nil
 }
 
 func jsString(s string) string {

@@ -37,13 +37,31 @@ func newTestBrowser(t *testing.T) (*Manager, *httptest.Server) {
 			fmt.Fprint(w, testPage)
 		}
 	}))
-	dir := t.TempDir()
+	dir := chromeDir(t)
 	m := NewManager(Options{Headless: true, Width: 1280, Height: 800, IdleAfter: time.Hour},
 		func(id int64) UserEnv {
 			return UserEnv{UserID: id, ProfileDir: dir + "/profile", DownloadDir: dir + "/dl", HomeDir: dir}
 		}, nil)
 	t.Cleanup(func() { m.CloseAll(); srv.Close() })
 	return m, srv
+}
+
+// chromeDir is a temporary directory for a browser profile. Chrome's helper
+// processes can still be writing to it for a moment after it's closed, so
+// removing it retries and leaves stragglers rather than failing the test
+// (t.TempDir would).
+func chromeDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "alexa-browser-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for i := 0; i < 10 && os.RemoveAll(dir) != nil; i++ {
+			time.Sleep(200 * time.Millisecond)
+		}
+	})
+	return dir
 }
 
 func TestBrowserFlow(t *testing.T) {
@@ -82,7 +100,7 @@ func TestBrowserFlow(t *testing.T) {
 		return 0
 	}
 	// type + submit
-	if err := tab.Type(idx(st, "Search"), "shoes", true, true); err != nil {
+	if _, err := tab.Type(idx(st, "Search"), "shoes", true, true); err != nil {
 		t.Fatal(err)
 	}
 	if u, _ := tab.URL(); !strings.Contains(u, "q=shoes") {

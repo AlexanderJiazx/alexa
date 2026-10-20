@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -134,6 +135,38 @@ func (s *Scheduler) NextRun(sc *store.Schedule, loc *time.Location) time.Time {
 		return time.Time{}
 	}
 	return sched.Next(time.Now())
+}
+
+// NextRuns lists up to n upcoming runs of a schedule.
+func (s *Scheduler) NextRuns(sc *store.Schedule, loc *time.Location, n int) []time.Time {
+	next := s.NextRun(sc, loc)
+	if next.IsZero() {
+		return nil
+	}
+	runs := []time.Time{next}
+	if sc.RunAt > 0 {
+		return runs
+	}
+	sched, err := cronParser.Parse(s.spec(sc, loc))
+	if err != nil {
+		return runs
+	}
+	for len(runs) < n {
+		runs = append(runs, sched.Next(runs[len(runs)-1]))
+	}
+	return runs
+}
+
+// cronDayWarning flags a spec that restricts both the day of the month and
+// the weekday: cron then runs on days matching either one, which is rarely
+// what was meant ("the second Tuesday" is not "0 18 8-14 * 2").
+func cronDayWarning(spec string) string {
+	f := strings.Fields(spec)
+	if len(f) != 5 || f[2] == "*" || f[2] == "?" || f[4] == "*" || f[4] == "?" {
+		return ""
+	}
+	return "Warning: this cron sets both a day of the month and a weekday, so it runs on every day that matches EITHER of them, not only days that match both. " +
+		"For something like \"the second Tuesday\", delete it (schedule_delete) and schedule the weekday alone with a prompt that first checks the date."
 }
 
 // ParseCron validates a 5-field cron expression.

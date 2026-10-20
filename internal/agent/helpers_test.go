@@ -3,8 +3,10 @@ package agent
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"alexagent/internal/llm"
+	"alexagent/internal/store"
 )
 
 func TestCleanText(t *testing.T) {
@@ -111,5 +113,42 @@ func TestIsContextOverflow(t *testing.T) {
 		if got := isContextOverflow(&llm.APIError{Status: 400, Message: msg}); got != want {
 			t.Errorf("isContextOverflow(%q) = %v, want %v", msg, got, want)
 		}
+	}
+}
+
+func TestCronDays(t *testing.T) {
+	for spec, warn := range map[string]bool{
+		"0 18 8-14 * 2": true,
+		"0 18 * * 2":    false,
+		"0 9 1 * *":     false,
+		"0 9 * * 1-5":   false,
+		"@daily":        false,
+	} {
+		if got := cronDayWarning(spec) != ""; got != warn {
+			t.Errorf("cronDayWarning(%q) warns = %v, want %v", spec, got, warn)
+		}
+	}
+	// What the warning is about: with both set, cron also runs on days
+	// that aren't Tuesdays.
+	loc, _ := time.LoadLocation("America/Toronto")
+	runs := (&Scheduler{}).NextRuns(&store.Schedule{Cron: "0 18 8-14 * 2", Enabled: true}, loc, 10)
+	if len(runs) != 10 {
+		t.Fatalf("NextRuns gave %d runs, want 10", len(runs))
+	}
+	other := false
+	for i, r := range runs {
+		if i > 0 && !r.After(runs[i-1]) {
+			t.Fatalf("runs out of order: %v", runs)
+		}
+		if r.In(loc).Weekday() != time.Tuesday {
+			other = true
+		}
+	}
+	if !other {
+		t.Errorf("expected some runs on days other than Tuesday: %v", runs)
+	}
+	once := (&Scheduler{}).NextRuns(&store.Schedule{RunAt: time.Now().Add(time.Hour).UnixMilli(), Enabled: true}, loc, 4)
+	if len(once) != 1 {
+		t.Errorf("a one-off schedule should have one run, got %d", len(once))
 	}
 }

@@ -24,10 +24,14 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/alexagent ./cmd/al
 FROM debian:trixie-slim
 ARG DEBIAN_FRONTEND=noninteractive
 # chromium: the agent's browser. fonts: render real-world pages (CJK, emoji).
-# python3/poppler/jq/curl/unzip: tools the agent's shell can use for files.
+# The rest is what the agent's shell works with: Python with the usual data,
+# chart and office-file libraries, PDF tools, OCR and ffmpeg. The run_shell
+# tool tells the model which of these it finds, so keep them in sync freely.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       chromium fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji fonts-liberation \
-      ca-certificates tini tzdata curl jq unzip python3 poppler-utils \
+      ca-certificates tini tzdata curl jq unzip zip poppler-utils ffmpeg tesseract-ocr \
+      python3 python3-matplotlib python3-pandas python3-openpyxl python3-docx \
+      python3-pypdf python3-pil python3-bs4 python3-requests \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=server /out/alexagent /usr/local/bin/alexagent
 ENV ADDR=:8080 \

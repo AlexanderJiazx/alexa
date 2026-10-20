@@ -563,7 +563,7 @@ func (rt *Runtime) buildInput(ctx context.Context, userID int64) ([]json.RawMess
 			case "long":
 				longs++
 				if longs > keepLong && len(text) > 1500 {
-					text = text[:1500] + "\n[…older output truncated to save context]"
+					text = text[:1500] + "\n[…the rest of this older output was dropped to save space; run the tool again if you need it]"
 				}
 			}
 			var output any = text
