@@ -1,0 +1,22 @@
+services:
+  alexa:
+    build: .
+    image: alexa:latest
+    container_name: alexa
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data
+    # Chrome needs more shared memory than Docker's 64 MB default.
+    shm_size: "1gb"
+    init: false # tini is already the entrypoint
+    # Chrome runs with --no-sandbox inside the container; per-user UIDs keep
+    # users apart. Drop what the server doesn't need.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, KILL, DAC_OVERRIDE, FOWNER]
+    security_opt:
+      - no-new-privileges:true
