@@ -132,8 +132,10 @@ func (tc *toolCtx) tab() (*browser.Tab, error) {
 	return b.Tab(tabKey)
 }
 
-// browserState returns the current page state as a tool result, prefixed by msg.
+// browserState returns the current page state as a tool result, prefixed by
+// msg (which can quote the page, so it's kept clear of typed passwords).
 func (tc *toolCtx) browserState(tab *browser.Tab, msg string) (*toolResult, error) {
+	msg = tab.Redact(msg)
 	st, err := tab.State()
 	if err != nil {
 		return &toolResult{Text: msg + "\n(Could not read the page state: " + err.Error() + ")"}, nil

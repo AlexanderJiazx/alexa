@@ -238,10 +238,12 @@ func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
 	note := strings.Join(notes, ", ")
 	if nd != nil {
 		answer := "The user replied: " + text
-		switch nd.Kind {
-		case "takeover":
+		switch {
+		case kind == "schedule":
+			answer = "The user hasn't answered yet. Meanwhile it's time for this scheduled job: " + text + "\nDo it, then ask again if you still need them."
+		case nd.Kind == "takeover":
 			answer = "The user didn't take over the browser and replied instead: " + text
-		case "login":
+		case nd.Kind == "login":
 			answer = "The user didn't enter their login and replied instead: " + text
 		}
 		if err := rt.resolveNeeds(ctx, u.ID, nd, stamp(loc, note, answer), nil); err != nil {

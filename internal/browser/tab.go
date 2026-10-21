@@ -50,7 +50,7 @@ type Tab struct {
 	humanAt    time.Time     // last input from a person in control
 	elems      []elemRef     // where each element of the latest state lives
 	elemsPage  *pageCtx      // the page that state was read from
-	secrets    []string      // passwords typed in from the vault, kept from the model
+	secrets    []secret      // passwords typed in from the vault, kept from the model
 
 	actMu sync.Mutex // serializes actions
 	busyN atomic.Int32

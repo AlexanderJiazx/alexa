@@ -37,7 +37,8 @@ func TestFillLogin(t *testing.T) {
 	st := mustState(t, tab)
 	user, pass := indexOf(t, st, `placeholder="Email"`, 0), indexOf(t, st, `placeholder="Password"`, 0)
 	frame := indexOf(t, st, `placeholder="Frame password"`, 0)
-	const secret = "hunter2-Correct-Horse"
+	// Markdown and HTML would escape some of these.
+	const secret = "hunter2_Correct*Horse<3"
 
 	// Each field is vetted on the page it's on, not the one around it.
 	if u, err := tab.FieldURL(frame); err != nil || !strings.HasPrefix(u, "http://localhost:") {
@@ -70,8 +71,13 @@ func TestFillLogin(t *testing.T) {
 	if want := fmt.Sprintf("Signed in as alice@example.com with a %d-character password", len(secret)); !strings.Contains(st.Text, want) {
 		t.Fatalf("the form didn't get the login:\n%s", st.Text)
 	}
+	if len(st.Screenshot) == 0 {
+		t.Error("the screenshot was left out though the password is masked")
+	}
 
-	// When the page reveals the password, the model still doesn't see it.
+	// When the page shows the password, the model still doesn't see it: not
+	// in the state, not in the page's text (where markdown and HTML escape
+	// it), not in a screenshot.
 	if _, err := tab.Click(indexOf(t, st, "Show password", 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -84,15 +90,79 @@ func TestFillLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	for what, text := range map[string]string{"the state": st.Text, "the page text": md} {
-		if strings.Contains(text, secret) {
+		if strings.Contains(text, "Correct") || strings.Contains(text, "Horse") {
 			t.Errorf("%s shows the password:\n%s", what, text)
 		}
 	}
 	if !strings.Contains(st.Text, `<input type=text placeholder="Password"> value=••••`) || !strings.Contains(st.Text, "You typed ••••") {
 		t.Errorf("the revealed password should read as ••••:\n%s", st.Text)
 	}
+	if len(st.Screenshot) != 0 || !strings.Contains(st.Text, "No screenshot") {
+		t.Errorf("a screenshot showing the password was kept (%d bytes)", len(st.Screenshot))
+	}
 	if got, err := tab.Eval(`getComputedStyle(document.getElementById('pass')).webkitTextSecurity`); err != nil || got != "disc" {
 		t.Errorf("the revealed field isn't masked on screen: %q, %v", got, err)
+	}
+	if got := tab.Redact("pass=hunter2_Correct%2AHorse%3C3, or hunter2\\_Correct\\*Horse&lt;3, or hunter2_Correct*H…"); strings.Contains(got, "Correct") {
+		t.Errorf("escaped forms weren't redacted: %s", got)
+	}
+}
+
+// A page can dress up its own field as another site's; the login still
+// only goes where the field really is.
+func TestFillSpoofedField(t *testing.T) {
+	tab, port := newFeatureBrowser(t, map[string]string{"/": `<!doctype html><title>Evil</title><body>
+		<input id=pw type=password placeholder="Bank password">
+		<script>
+		  const fake = { location: { href: 'https://example.com/login' }, defaultView: window,
+		    get activeElement() { return document.activeElement }, hasFocus: () => document.hasFocus() };
+		  Object.defineProperty(pw, 'ownerDocument', { get: () => fake });
+		</script>`})
+	if err := tab.Navigate(fmt.Sprintf("http://127.0.0.1:%d/", port)); err != nil {
+		t.Fatal(err)
+	}
+	pw := indexOf(t, mustState(t, tab), `placeholder="Bank password"`, 0)
+	if u, err := tab.FieldURL(pw); err != nil || !strings.HasPrefix(u, "http://127.0.0.1:") {
+		t.Fatalf("the field is on %q, %v; want the real page", u, err)
+	}
+	if err := tab.Fill(pw, "bank-secret-1", true, onSite("example.com")); err == nil {
+		t.Fatal("a login for example.com went into a page only claiming to be it")
+	}
+	if got, _ := tab.Eval(`document.getElementById('pw').value`); got != "" {
+		t.Fatalf("the field holds %q", got)
+	}
+}
+
+// Frameworks like React keep their own copy of a field's value and take
+// changes only from input events; a filled login has to reach that copy.
+func TestFillTrackedField(t *testing.T) {
+	tab, port := newFeatureBrowser(t, map[string]string{"/": `<!doctype html><title>App</title><body>
+		<form onsubmit="event.preventDefault(); out.textContent = 'state ' + state.user + ' / ' + state.pass.length">
+		<input id=ru type=email placeholder="Email"> <input id=rp type=password placeholder="Password"> <button>Go</button></form><p id=out></p>
+		<script>
+		  const state = { user: '', pass: '' };
+		  const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+		  for (const [el, key] of [[ru, 'user'], [rp, 'pass']]) {
+		    let tracked = '';
+		    Object.defineProperty(el, 'value', { get() { return native.get.call(this) }, set(v) { tracked = v; native.set.call(this, v) } });
+		    el.addEventListener('input', () => { const v = native.get.call(el); if (v !== tracked) { tracked = v; state[key] = v } });
+		  }
+		</script>`})
+	if err := tab.Navigate(fmt.Sprintf("http://127.0.0.1:%d/", port)); err != nil {
+		t.Fatal(err)
+	}
+	st := mustState(t, tab)
+	if err := tab.Fill(indexOf(t, st, `placeholder="Email"`, 0), "alice@example.com", false, onSite("127.0.0.1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tab.Fill(indexOf(t, st, `placeholder="Password"`, 0), "tracked-pass", true, onSite("127.0.0.1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tab.Keys("Enter"); err != nil {
+		t.Fatal(err)
+	}
+	if st := mustState(t, tab); !strings.Contains(st.Text, "state alice@example.com / 12") {
+		t.Fatalf("the app's own state didn't get the login:\n%s", st.Text)
 	}
 }
 
@@ -120,9 +190,7 @@ func TestCursorGlide(t *testing.T) {
 	if want := glide(math.Hypot(x1-x0, y1-y0)); want < 300*time.Millisecond || took < want {
 		t.Errorf("the click took %s, want at least the %s glide", took, want)
 	}
-	if _, title := tab.URL(); title != "clicked" {
-		if st := mustState(t, tab); st.Title != "clicked" {
-			t.Errorf("the click didn't land: title %q", st.Title)
-		}
+	if st := mustState(t, tab); st.Title != "clicked" {
+		t.Errorf("the click didn't land: title %q", st.Title)
 	}
 }

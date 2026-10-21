@@ -30,6 +30,12 @@ const pad = '  '
 
 const viaInput = (e: React.KeyboardEvent) => e.nativeEvent.isComposing || e.keyCode === 229 || ['Unidentified', 'Process', 'Dead'].includes(e.key)
 
+// On phones and tablets, text, Backspace and Enter also come through the
+// keyboard field: their keyboards don't reliably let a key be held back,
+// so taking the key as well would send it twice.
+const coarsePointer = matchMedia('(pointer: coarse)')
+const editKey = (e: React.KeyboardEvent) => coarsePointer.matches && !e.ctrlKey && !e.metaKey && (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Enter')
+
 // LiveScreen streams the session's shared browser as JPEG frames and, when
 // the user is in control, forwards their mouse and keyboard to it.
 export function LiveScreen({ control, cursor, url, onUrl }: Props) {
@@ -50,11 +56,15 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
   const at = useRef<Point | null>(null)
   const start = useRef<Point | null>(null)
   const frame = useRef(0)
-  const seen = useRef(0)
+  // The pointer moves that have been shown; one from before this view
+  // opened isn't played again.
+  const seen = useRef(cursor?.seq ?? 0)
+  const sizeRef = useRef(size)
+  sizeRef.current = size
   // What the keyboard field held after the last change was sent.
   const sent = useRef(pad)
   const composing = useRef(false)
-  const coarse = useRef(matchMedia('(pointer: coarse)').matches)
+  const coarse = useRef(coarsePointer.matches)
 
   useEffect(() => {
     let stopped = false
@@ -110,14 +120,21 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
     at.current = p
     const el = pointerRef.current
     if (!el) return
-    el.style.left = `${(p.x / size.w) * 100}%`
-    el.style.top = `${(p.y / size.h) * 100}%`
+    el.style.left = `${(p.x / sizeRef.current.w) * 100}%`
+    el.style.top = `${(p.y / sizeRef.current.h) * 100}%`
   }
   useEffect(() => {
     const el = pointerRef.current
     if (!cursor || control || !el) return
-    const from = at.current ?? start.current ?? { x: size.w / 2, y: size.h / 2 }
     const to = { x: cursor.x, y: cursor.y }
+    // Opening the view, or back from a take-over, the pointer is just where
+    // it was.
+    if (cursor.seq === seen.current) {
+      place(to)
+      return
+    }
+    seen.current = cursor.seq
+    const from = at.current ?? start.current ?? { x: sizeRef.current.w / 2, y: sizeRef.current.h / 2 }
     const dx = to.x - from.x
     const dy = to.y - from.y
     const dist = Math.hypot(dx, dy)
@@ -125,11 +142,8 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
     // Bend the path a little to one side, as a hand would.
     const bend = Math.min(dist * 0.16, 56) * (cursor.seq % 2 ? 1 : -1)
     const c = { x: from.x + dx / 2 - (dy / (dist || 1)) * bend, y: from.y + dy / 2 + (dx / (dist || 1)) * bend }
-    // Back from a take-over, the pointer reappears where it was.
-    const fresh = cursor.seq !== seen.current
-    seen.current = cursor.seq
     const click = () => {
-      if (!cursor.click || !fresh) return
+      if (!cursor.click) return
       el.classList.remove('click')
       void el.offsetWidth // restart the animation
       el.classList.add('click')
@@ -226,7 +240,7 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
     if (!control) return
     // Input methods, accent keys and soft keyboards that don't say which key
     // it was type through onInput.
-    if (viaInput(e)) return
+    if (viaInput(e) || editKey(e)) return
     // Let the browser handle paste so the text can be sent.
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') return
     e.preventDefault()
@@ -234,7 +248,7 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
     send({ kind: 'keydown', key: e.key, code: e.code, keyCode: e.keyCode, text: printable ? e.key : e.key === 'Enter' ? '\r' : '', modifiers: mods(e) })
   }
   const onKeyUp = (e: React.KeyboardEvent) => {
-    if (!control || viaInput(e)) return
+    if (!control || viaInput(e) || editKey(e)) return
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') return
     e.preventDefault()
     send({ kind: 'keyup', key: e.key, code: e.code, keyCode: e.keyCode, modifiers: mods(e) })
@@ -249,6 +263,9 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
   const onPointerDown = (e: React.PointerEvent) => {
     if (!control) return
     if (e.pointerType === 'touch') {
+      // No mouse events after the tap: they'd take the focus from the
+      // keyboard field and put the on-screen keyboard away.
+      e.preventDefault()
       touch.current = { x: e.clientX, y: e.clientY, moved: false, typing: document.activeElement === keysRef.current }
       return
     }

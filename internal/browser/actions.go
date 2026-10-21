@@ -160,6 +160,12 @@ func (t *Tab) state() (*State, error) {
 	if ix.Text != "" {
 		fmt.Fprintf(&b, "\nVisible text:\n%s\n", ix.Text)
 	}
+	// A screenshot can't be redacted: leave it out while the page shows a
+	// password typed in from a saved login.
+	if t.showsSecret(b.String()) || t.pageShowsSecret() {
+		annotated = nil
+		b.WriteString("\n(No screenshot this time: the page is showing one of the user's saved passwords.)\n")
+	}
 	return &State{URL: t.Redact(ix.URL), Title: t.Redact(ix.Title), Text: t.Redact(b.String()), Screenshot: annotated}, nil
 }
 

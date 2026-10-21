@@ -927,6 +927,34 @@ func TestSignIn(t *testing.T) {
 	}
 }
 
+// A scheduled job that comes up while Alexa waits for the user isn't taken
+// for their answer.
+func TestScheduleWhileWaiting(t *testing.T) {
+	e := newTestServer(t)
+	fm := e.model
+	c := e.client(t)
+	c.signup("gina")
+	fm.script(reply(900, fn("request_login", map[string]any{"reason": "Sign in to check your orders", "site": "example.com"})))
+	c.send("check my orders")
+	c.wait("needs")
+	code, m, _ := c.do("POST", "/api/schedules", map[string]any{"name": "Water plants", "prompt": "Remind me to water the plants", "cron": "0 8 * * *"}, true)
+	if code != 200 {
+		t.Fatalf("create schedule: %d %v", code, m)
+	}
+	fm.script(
+		func(_ context.Context, req *llm.Request) ([]any, int64) {
+			in := inputText(req)
+			if !strings.Contains(in, "hasn't answered yet") || !strings.Contains(in, "Remind me to water the plants") || strings.Contains(in, "The user replied") || strings.Contains(in, "replied instead") {
+				t.Errorf("the scheduled job reached Alexa as: …%s", tail(in, 500))
+			}
+			return []any{fn("say", map[string]any{"text": "Time to water the plants."})}, 900
+		},
+		reply(900),
+	)
+	c.post("/api/schedules/"+fmt.Sprint(m["id"])+"/run", nil)
+	c.wait("idle")
+}
+
 // findChrome returns a Chrome to run, or skips the test.
 func findChrome(t *testing.T) string {
 	t.Helper()

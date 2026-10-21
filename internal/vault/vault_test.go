@@ -3,6 +3,7 @@ package vault
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,12 +93,12 @@ func TestVault(t *testing.T) {
 		t.Fatal("the password is stored in the clear")
 	}
 	// Found on any page of the site, and only for its owner.
-	got, err := v.Find(ctx, alice.ID, "amazon.com", "")
-	if err != nil || len(got) != 1 || got[0].Password != "hunter2-amazon" || got[0].Username != "alice@example.com" {
-		t.Fatalf("find: %+v %v", got, err)
+	got, others, err := v.Pick(ctx, alice.ID, "amazon.com", "")
+	if err != nil || got.Password != "hunter2-amazon" || got.Username != "alice@example.com" || len(others) != 0 {
+		t.Fatalf("pick: %+v %v %v", got, others, err)
 	}
-	if got, _ := v.Find(ctx, bob.ID, "amazon.com", ""); len(got) != 0 {
-		t.Fatalf("bob found alice's login: %+v", got)
+	if _, _, err := v.Pick(ctx, bob.ID, "amazon.com", ""); !errors.Is(err, ErrNoLogin) {
+		t.Fatalf("bob picked alice's login: %v", err)
 	}
 
 	// Saving the same account again replaces its password.
@@ -107,8 +108,8 @@ func TestVault(t *testing.T) {
 	if list, _ := v.List(ctx, alice.ID); len(list) != 1 {
 		t.Fatalf("logins = %d, want 1", len(list))
 	}
-	if got, _ := v.Find(ctx, alice.ID, "amazon.com", ""); got[0].Password != "new-pass" {
-		t.Fatalf("password = %q", got[0].Password)
+	if got, _, _ := v.Pick(ctx, alice.ID, "amazon.com", ""); got.Password != "new-pass" {
+		t.Fatalf("password = %q", got.Password)
 	}
 
 	// A ciphertext moved to another user's login doesn't decrypt.
@@ -116,8 +117,8 @@ func TestVault(t *testing.T) {
 	if err := st.SaveLogin(ctx, stolen); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v.Find(ctx, bob.ID, "amazon.com", ""); err == nil {
-		t.Fatal("a password moved to another user decrypted")
+	if _, _, err := v.Pick(ctx, bob.ID, "amazon.com", ""); !errors.Is(err, ErrUnreadable) {
+		t.Fatalf("a password moved to another user: %v", err)
 	}
 
 	// Renaming the account keeps the password.
@@ -125,8 +126,11 @@ func TestVault(t *testing.T) {
 	if err != nil || upd.Username != "alice@work.example" {
 		t.Fatalf("update: %+v %v", upd, err)
 	}
-	if got, _ := v.Find(ctx, alice.ID, "amazon.com", "alice@work.example"); len(got) != 1 || got[0].Password != "new-pass" {
-		t.Fatalf("after rename: %+v", got)
+	if got, _, err := v.Pick(ctx, alice.ID, "amazon.com", "alice@work.example"); err != nil || got.Password != "new-pass" {
+		t.Fatalf("after rename: %+v %v", got, err)
+	}
+	if _, others, err := v.Pick(ctx, alice.ID, "amazon.com", "nobody"); !errors.Is(err, ErrNoLogin) || strings.Join(others, ",") != "alice@work.example" {
+		t.Fatalf("an unknown account: %v %v", others, err)
 	}
 
 	// The same key opens the vault again; another key doesn't.
@@ -134,15 +138,38 @@ func TestVault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := again.Find(ctx, alice.ID, "amazon.com", ""); err != nil || len(got) != 1 {
-		t.Fatalf("reopened vault: %+v %v", got, err)
+	if _, _, err := again.Pick(ctx, alice.ID, "amazon.com", ""); err != nil {
+		t.Fatalf("reopened vault: %v", err)
 	}
 	other, err := Open(filepath.Join(t.TempDir(), "other.key"), st)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := other.Find(ctx, alice.ID, "amazon.com", ""); err == nil || !strings.Contains(err.Error(), "decrypted") {
+	if _, _, err := other.Pick(ctx, alice.ID, "amazon.com", ""); !errors.Is(err, ErrUnreadable) {
 		t.Fatalf("a different key: %v", err)
+	}
+	// A login that can't be read doesn't get in the way of one that can: one
+	// just entered, or one saved again.
+	if err := other.Hold(alice.ID, "amazon.com", "alice@work.example", "held-pass"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := other.Pick(ctx, alice.ID, "amazon.com", ""); err != nil || got.Password != "held-pass" {
+		t.Fatalf("held next to an unreadable one: %+v %v", got, err)
+	}
+	if _, err := other.Save(ctx, alice.ID, "amazon.com", "alice@second.example", "second-pass"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := other.Pick(ctx, alice.ID, "amazon.com", "alice@second.example"); err != nil || got.Password != "second-pass" {
+		t.Fatalf("saved next to an unreadable one: %+v %v", got, err)
+	}
+	if _, err := other.Save(ctx, alice.ID, "amazon.com", "alice@work.example", "replaced"); err != nil {
+		t.Fatal(err)
+	}
+	other.mu.Lock()
+	delete(other.held, alice.ID)
+	other.mu.Unlock()
+	if got, _, err := other.Pick(ctx, alice.ID, "amazon.com", "alice@work.example"); err != nil || got.Password != "replaced" {
+		t.Fatalf("saving it again: %+v %v", got, err)
 	}
 	if err := os.WriteFile(key, []byte("not a key"), 0o600); err != nil {
 		t.Fatal(err)
@@ -163,9 +190,12 @@ func TestHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The login just entered comes first; the saved one is still there.
-	got, err := v.Find(ctx, u.ID, "github.com", "")
-	if err != nil || len(got) != 2 || got[0].Username != "carol-work" || got[0].ID != 0 || got[1].Password != "saved-pass" {
-		t.Fatalf("find: %+v %v", got, err)
+	got, others, err := v.Pick(ctx, u.ID, "github.com", "")
+	if err != nil || got.Username != "carol-work" || got.ID != 0 || strings.Join(others, ",") != "carol" {
+		t.Fatalf("pick: %+v %v %v", got, others, err)
+	}
+	if got, _, err := v.Pick(ctx, u.ID, "github.com", "carol"); err != nil || got.Password != "saved-pass" {
+		t.Fatalf("pick the saved one: %+v %v", got, err)
 	}
 	if names, _ := v.Accounts(ctx, u.ID, "github.com"); strings.Join(names, ",") != "carol-work,carol" {
 		t.Fatalf("accounts = %v", names)
@@ -177,7 +207,7 @@ func TestHold(t *testing.T) {
 	v.mu.Lock()
 	v.held[u.ID][0].until = time.Now().Add(-time.Second)
 	v.mu.Unlock()
-	if got, _ := v.Find(ctx, u.ID, "github.com", ""); len(got) != 1 || got[0].Username != "carol" {
-		t.Fatalf("after expiry: %+v", got)
+	if got, _, err := v.Pick(ctx, u.ID, "github.com", ""); err != nil || got.Username != "carol" {
+		t.Fatalf("after expiry: %+v %v", got, err)
 	}
 }

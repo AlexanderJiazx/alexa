@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/url"
 	"os"
@@ -23,6 +24,14 @@ import (
 	"golang.org/x/net/publicsuffix"
 
 	"alexagent/internal/store"
+)
+
+var (
+	// ErrNoLogin is returned when there's no login for a site.
+	ErrNoLogin = errors.New("no login saved for the site")
+	// ErrUnreadable is returned when the only logins for a site can't be
+	// decrypted, as after the vault key was replaced.
+	ErrUnreadable = errors.New("the saved password can't be decrypted (was the vault key replaced?)")
 )
 
 // Vault encrypts, stores and finds users' logins.
@@ -119,7 +128,7 @@ func (v *Vault) open(l *store.Login) (string, error) {
 			return string(pw), nil
 		}
 	}
-	return "", fmt.Errorf("the saved password for %s can't be decrypted (was the vault key replaced?); enter it again", l.Site)
+	return "", ErrUnreadable
 }
 
 // Save saves a login for a site (given as a URL, host or domain), replacing
@@ -171,7 +180,8 @@ func (v *Vault) Delete(ctx context.Context, userID, id int64) (bool, error) {
 	return v.st.DeleteLogin(ctx, userID, id)
 }
 
-// Hold keeps a login the user entered for one sign-in, without saving it.
+// Hold keeps a login the user entered for one sign-in, without saving it,
+// for a little while.
 func (v *Vault) Hold(userID int64, site, username, password string) error {
 	site, err := Site(site)
 	if err != nil {
@@ -190,6 +200,11 @@ func (v *Vault) Hold(userID int64, site, username, password string) error {
 		}
 	}
 	v.held[userID] = keep
+	time.AfterFunc(holdFor+time.Second, func() {
+		v.mu.Lock()
+		v.live(userID)
+		v.mu.Unlock()
+	})
 	return nil
 }
 
@@ -211,33 +226,56 @@ func (v *Vault) live(userID int64) []Login {
 	return keep
 }
 
-// Find returns the user's logins for a site in the order to try them: one
-// just entered for this sign-in first, then saved ones, the most recently
-// used first. With username set, only that account's.
-func (v *Vault) Find(ctx context.Context, userID int64, site, username string) ([]Login, error) {
-	var out []Login
+// Pick returns the login to sign in to a site with — one entered for this
+// sign-in, else the saved one used most recently; with username set, that
+// account's — and the usernames of the user's other accounts there. Only
+// that login's password is decrypted; saved ones that can't be are passed
+// over.
+func (v *Vault) Pick(ctx context.Context, userID int64, site, username string) (*Login, []string, error) {
+	names, err := v.Accounts(ctx, userID, site)
+	if err != nil {
+		return nil, nil, err
+	}
+	others := func(l *Login) []string {
+		var out []string
+		for _, n := range names {
+			if !strings.EqualFold(n, l.Username) {
+				out = append(out, n)
+			}
+		}
+		return out
+	}
+	match := func(name string) bool { return username == "" || strings.EqualFold(name, username) }
 	v.mu.Lock()
 	for _, l := range v.live(userID) {
-		if l.Site == site && (username == "" || strings.EqualFold(l.Username, username)) {
-			out = append(out, l)
+		if l.Site == site && match(l.Username) {
+			v.mu.Unlock()
+			return &l, others(&l), nil
 		}
 	}
 	v.mu.Unlock()
 	saved, err := v.st.SiteLogins(ctx, userID, site)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	unreadable := false
 	for _, s := range saved {
-		if (username != "" && !strings.EqualFold(s.Username, username)) || has(out, s.Username) {
+		if !match(s.Username) {
 			continue
 		}
 		pw, err := v.open(s)
 		if err != nil {
-			return nil, err
+			slog.Warn("saved login can't be decrypted", "user", userID, "site", site, "login", s.ID)
+			unreadable = true
+			continue
 		}
-		out = append(out, Login{ID: s.ID, Site: s.Site, Username: s.Username, Password: pw})
+		l := &Login{ID: s.ID, Site: s.Site, Username: s.Username, Password: pw}
+		return l, others(l), nil
 	}
-	return out, nil
+	if unreadable {
+		return nil, names, ErrUnreadable
+	}
+	return nil, names, ErrNoLogin
 }
 
 // Accounts lists the usernames the user has for a site, in the order Find
@@ -268,15 +306,6 @@ func (v *Vault) Used(ctx context.Context, userID int64, l Login) {
 	if l.ID > 0 {
 		_ = v.st.LoginUsed(ctx, userID, l.ID)
 	}
-}
-
-func has(list []Login, username string) bool {
-	for _, l := range list {
-		if strings.EqualFold(l.Username, username) {
-			return true
-		}
-	}
-	return false
 }
 
 func hasName(list []string, username string) bool {

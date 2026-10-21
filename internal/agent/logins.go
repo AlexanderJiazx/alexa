@@ -91,17 +91,17 @@ func browserLogin(tc *toolCtx, tab *browser.Tab, a map[string]any) (string, erro
 	}
 	uid := tc.run.user.ID
 	name := strings.TrimSpace(str(a, "username"))
-	logins, err := tc.rt.vault.Find(tc.ctx, uid, site, name)
-	if err != nil {
+	l, others, err := tc.rt.vault.Pick(tc.ctx, uid, site, name)
+	switch {
+	case errors.Is(err, vault.ErrNoLogin) && name != "" && len(others) > 0:
+		return "", fmt.Errorf("there's no saved login for %s with the username %q; the saved ones are %s", site, name, strings.Join(others, ", "))
+	case errors.Is(err, vault.ErrNoLogin):
+		return "", fmt.Errorf("there's no saved login for %s. Call request_login so the user can enter it", site)
+	case errors.Is(err, vault.ErrUnreadable):
+		return "", fmt.Errorf("the saved login for %s can't be read (the vault key was replaced). Call request_login so the user can enter it again", site)
+	case err != nil:
 		return "", err
 	}
-	if len(logins) == 0 {
-		if names, _ := tc.rt.vault.Accounts(tc.ctx, uid, site); name != "" && len(names) > 0 {
-			return "", fmt.Errorf("there's no saved login for %s with the username %q; the saved ones are %s", site, name, strings.Join(names, ", "))
-		}
-		return "", fmt.Errorf("there's no saved login for %s. Call request_login so the user can enter it", site)
-	}
-	l := logins[0]
 	allow := func(pageURL string) error { return vault.Allowed(pageURL, l.Site) }
 	var filled []string
 	if userIdx > 0 {
@@ -116,7 +116,7 @@ func browserLogin(tc *toolCtx, tab *browser.Tab, a map[string]any) (string, erro
 		}
 		filled = append(filled, "password")
 	}
-	tc.rt.vault.Used(tc.ctx, uid, l)
+	tc.rt.vault.Used(tc.ctx, uid, *l)
 	msg := fmt.Sprintf("Filled in the %s of the login for %s (username %s)", strings.Join(filled, " and "), site, l.Username)
 	if boolean(a, "submit", false) {
 		if err := tab.Keys("Enter"); err != nil {
@@ -125,11 +125,7 @@ func browserLogin(tc *toolCtx, tab *browser.Tab, a map[string]any) (string, erro
 		msg += " and pressed Enter"
 	}
 	msg += "."
-	if len(logins) > 1 && name == "" {
-		var others []string
-		for _, o := range logins[1:] {
-			others = append(others, o.Username)
-		}
+	if len(others) > 0 && name == "" {
 		msg += fmt.Sprintf(" Other accounts saved for %s: %s (pass username to use one).", site, strings.Join(others, ", "))
 	}
 	return msg, nil

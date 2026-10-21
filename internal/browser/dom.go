@@ -64,7 +64,7 @@ const indexFn = `(opts) => {
       const v = el.value || '';
       // A password typed in from a saved login stays masked even if the
       // page turns its field into a text field.
-      if (type === 'password' || el.__aaSecret) text = v ? 'value=••••' : 'value=""';
+      if (type === 'password' || el.hasAttribute('data-alexa-secret')) text = v ? 'value=••••' : 'value=""';
       else if (!['checkbox', 'radio', 'submit', 'button', 'file'].includes(type)) text = 'value="' + cut(clean(v), 60) + '"';
       else if (type === 'submit' || type === 'button') text = cut(clean(v), MAXTXT);
     } else if (tag === 'select') {
