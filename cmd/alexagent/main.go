@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -55,6 +56,9 @@ func main() {
 	}
 	if cfg.SandboxUIDs {
 		lockDown(cfg.DataDir)
+		if ds := closedParents(cfg.DataDir); len(ds) > 0 {
+			fatal("data dir", fmt.Errorf("each user's Chrome and shell run under their own UID (SANDBOX_UIDS) and must reach their files in %s, but other users can't pass through %s: move DATA_DIR, or run chmod o+x on them", cfg.DataDir, strings.Join(ds, ", ")))
+		}
 	}
 	// Keep a copy of the log next to the data so it survives the terminal.
 	if *createUser == "" {
@@ -213,6 +217,20 @@ func lockDown(dir string) {
 			continue
 		}
 		_ = os.Chmod(p, 0o600)
+	}
+}
+
+// closedParents returns the directories above dir that other users can't
+// pass through.
+func closedParents(dir string) []string {
+	var closed []string
+	for d := filepath.Dir(dir); ; d = filepath.Dir(d) {
+		if fi, err := os.Stat(d); err == nil && fi.Mode().Perm()&0o001 == 0 {
+			closed = append([]string{d}, closed...)
+		}
+		if d == filepath.Dir(d) {
+			return closed
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -1093,6 +1094,73 @@ func TestStaticFallback(t *testing.T) {
 	}
 	if code, _, _ := c.do("GET", "/api/nope", nil, false); code != 404 {
 		t.Fatalf("unknown api route = %d", code)
+	}
+}
+
+// A stretch of work that uses all its turns ends with Alexa telling the user
+// where things stand; only if it doesn't is it an error.
+func TestOutOfSteps(t *testing.T) {
+	t.Setenv("MAX_TURNS", "3")
+	e := newTestServer(t)
+	c := e.client(t)
+	c.signup("alice")
+	look := func(status string) turn { return reply(1000, fn("list_files", map[string]any{"status": status})) }
+	e.model.script(look("Looking"), look("Looking again"), look("Looking once more"),
+		expect(t, []string{"That's all the steps for this stretch of work"},
+			fn("list_files", map[string]any{"status": "One more look"}),
+			fn("say", map[string]any{"text": "I went through 3 of 6 folders; say the word and I'll carry on."})))
+	c.send("go through my folders")
+	s := c.wait("idle")
+	last := s.Feed[len(s.Feed)-1]
+	if last.Kind != "say" || !strings.Contains(last.Text, "3 of 6 folders") {
+		t.Errorf("the run ended with %s %q", last.Kind, last.Text)
+	}
+	for _, en := range s.Feed {
+		if en.Kind == "error" {
+			t.Errorf("an error was shown: %q", en.Text)
+		}
+	}
+
+	// It keeps working instead of answering: then the run stops with an error.
+	e.model.script(look("Looking"), look("Looking again"), look("Looking once more"), look("Still looking"))
+	c.send("and the rest")
+	s = c.wait("idle")
+	if last := s.Feed[len(s.Feed)-1]; last.Kind != "error" || !strings.Contains(last.Text, "stopped after 3 steps") {
+		t.Errorf("the run ended with %s %q", last.Kind, last.Text)
+	}
+}
+
+// An uploaded file keeps its name (a site it's uploaded to sees it); a
+// second one by the same name gets a number.
+func TestUploadNames(t *testing.T) {
+	e := newTestServer(t)
+	c := e.client(t)
+	c.signup("alice")
+	upload := func(name string) string {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		fw, _ := mw.CreateFormFile("file", name)
+		_, _ = fw.Write([]byte("%PDF-1.4 lease"))
+		_ = mw.Close()
+		req, _ := http.NewRequest("POST", c.base+"/api/uploads", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		req.Header.Set("X-Alexa", "1")
+		resp, err := c.hc.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var a struct{ Name, Path string }
+		if err := json.NewDecoder(resp.Body).Decode(&a); err != nil || resp.StatusCode != 200 {
+			t.Fatalf("upload %s: %d %v", name, resp.StatusCode, err)
+		}
+		return a.Path
+	}
+	day := time.Now().Format("2006-01-02")
+	for _, want := range []string{"Lease.pdf", "Lease-2.pdf"} {
+		if got := upload("Lease.PDF"); got != "uploads/"+day+"/"+want {
+			t.Errorf("uploaded as %q, want uploads/%s/%s", got, day, want)
+		}
 	}
 }
 

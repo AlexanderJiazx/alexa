@@ -147,6 +147,7 @@ func (t *Tab) state() (*State, error) {
 	for _, d := range dialogs {
 		fmt.Fprintf(&b, "Note: the page showed a %s (auto-accepted).\n", d)
 	}
+	b.WriteString(downloadNote(t.b.downloads.take(8 * time.Second)))
 	b.WriteString("\nInteractive elements in view ([index] description; boxes with these numbers are drawn on the screenshot):\n")
 	if len(ix.Els) == 0 {
 		b.WriteString("(none)\n")

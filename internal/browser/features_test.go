@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,10 @@ func newFeatureBrowser(t *testing.T, pages map[string]string) (*Tab, int) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if strings.HasSuffix(r.URL.Path, ".csv") {
+			w.Header().Set("Content-Type", "text/csv")
+			w.Header().Set("Content-Disposition", "attachment")
+		}
 		fmt.Fprint(w, strings.ReplaceAll(body, "PORT", fmt.Sprint(port)))
 	})}
 	go srv.Serve(ln)
@@ -309,5 +314,87 @@ func TestScriptLinksAreIndexed(t *testing.T) {
 	}
 	if strings.Count(st.Text, "<a") != 1 {
 		t.Errorf("an empty named anchor shouldn't be listed:\n%s", st.Text)
+	}
+}
+
+// A download a click starts is noted in the next state under the name it
+// was saved as, once.
+func TestDownloadNoted(t *testing.T) {
+	tab, port := newFeatureBrowser(t, map[string]string{
+		"/":          `<!doctype html><title>Files</title><body><a href="/usage.csv">Usage (CSV)</a>`,
+		"/usage.csv": "date,kwh\n2026-08-01,21.1\n",
+	})
+	if err := tab.Navigate(fmt.Sprintf("http://127.0.0.1:%d/", port)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tab.Click(indexOf(t, mustState(t, tab), "Usage (CSV)", 0)); err != nil {
+		t.Fatal(err)
+	}
+	if st := mustState(t, tab); !strings.Contains(st.Text, "downloaded usage.csv to downloads/") {
+		t.Errorf("the state doesn't say it downloaded usage.csv:\n%s", st.Text)
+	}
+	if b, err := os.ReadFile(filepath.Join(tab.b.env.DownloadDir, "usage.csv")); err != nil || !strings.Contains(string(b), "2026-08-01,21.1") {
+		t.Errorf("usage.csv holds %q, %v", b, err)
+	}
+	if again := mustState(t, tab); strings.Contains(again.Text, "downloaded") {
+		t.Errorf("the download was noted twice:\n%s", again.Text)
+	}
+}
+
+// A finished download takes its name without replacing a file by that name.
+func TestPlaceDownload(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, s string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	write("bill.pdf", "first")
+	for i, want := range []string{"bill-2.pdf", "bill-3.pdf"} {
+		from := write(fmt.Sprintf("guid-%d", i), "next")
+		if got := place(from, dir, "bill.pdf"); got != want {
+			t.Errorf("placed as %q, want %q", got, want)
+		}
+		if _, err := os.Stat(from); !os.IsNotExist(err) {
+			t.Errorf("%s is still there", from)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "bill.pdf")); string(b) != "first" {
+		t.Errorf("bill.pdf was replaced: %q", b)
+	}
+}
+
+// A popup that closes itself hands the tab back to the page that opened it.
+func TestPopupClosesItself(t *testing.T) {
+	tab, port := newFeatureBrowser(t, map[string]string{
+		"/":      `<!doctype html><title>Product</title><body><a href="/guide" target="_blank">Size guide</a>`,
+		"/guide": `<!doctype html><title>Guide</title><body><p>M fits 96–104 cm</p><button onclick="window.close()">Close</button>`,
+	})
+	if err := tab.Navigate(fmt.Sprintf("http://127.0.0.1:%d/", port)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tab.Click(indexOf(t, mustState(t, tab), "Size guide", 0)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	st := mustState(t, tab)
+	if st.Title != "Guide" {
+		t.Fatalf("the popup wasn't followed: %q", st.Title)
+	}
+	if _, err := tab.Click(indexOf(t, st, "Close", 0)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	t0 := time.Now()
+	if st := mustState(t, tab); st.Title != "Product" || strings.Contains(st.Text, "popup window") {
+		t.Errorf("after the popup closed, the tab is on %q:\n%s", st.Title, st.Text)
+	}
+	if time.Since(t0) > 5*time.Second {
+		t.Errorf("reading the page took %s", time.Since(t0))
+	}
+	if err := tab.Navigate(fmt.Sprintf("http://127.0.0.1:%d/guide", port)); err != nil {
+		t.Errorf("the tab can't navigate after the popup closed: %v", err)
 	}
 }

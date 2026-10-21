@@ -208,6 +208,22 @@ func (t *Tab) switchTo(ctx context.Context, cancel context.CancelFunc) error {
 	return nil
 }
 
+// dropPopup ends the popup with target id if it's one of this tab's.
+func (t *Tab) dropPopup(id target.ID) {
+	t.mu.Lock()
+	var gone *pageCtx
+	for i, p := range t.pages {
+		if i > 0 && p.tid == id {
+			gone = p
+		}
+	}
+	t.mu.Unlock()
+	if gone != nil {
+		gone.cancel()
+		t.popClosed()
+	}
+}
+
 // popClosed drops popups whose target went away and returns to the opener.
 func (t *Tab) popClosed() {
 	time.Sleep(200 * time.Millisecond)

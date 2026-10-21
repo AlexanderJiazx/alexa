@@ -17,6 +17,19 @@ func TestCleanText(t *testing.T) {
 	}
 }
 
+func TestDropTitle(t *testing.T) {
+	for in, want := range map[string]string{
+		"# Québec City, Nov 13–16\n\n## Weather\nCold.": "## Weather\nCold.",
+		"## Weather\nCold.":            "## Weather\nCold.",
+		"Intro line.\n# Heading later": "Intro line.\n# Heading later",
+		"#hashtag first":               "#hashtag first",
+	} {
+		if got := dropTitle(in); got != want {
+			t.Errorf("dropTitle(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestClip(t *testing.T) {
 	for _, c := range []struct {
 		in   string

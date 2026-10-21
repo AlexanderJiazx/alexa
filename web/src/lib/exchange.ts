@@ -17,6 +17,21 @@ export function exchangeStart(feed: Entry[]) {
   return 0
 }
 
+// current returns the exchange the main screen shows. A scheduled job that
+// hasn't had anything to say (only its note and steps so far) stays off it,
+// and the exchange before it stays in view.
+export function current(feed: Entry[]) {
+  let end = feed.length
+  for (;;) {
+    const start = exchangeStart(feed.slice(0, end))
+    const ex = feed.slice(start, end)
+    const quiet = ex[0]?.data?.scheduled && ex.every((e) => e.kind === 'step' || e.kind === 'note')
+    if (!quiet) return ex
+    if (start === 0) return []
+    end = start
+  }
+}
+
 const read = (key: string) => {
   try {
     return Number(localStorage.getItem(key)) || 0
@@ -39,8 +54,9 @@ const write = (key: string, id: number) => {
 export function useExchange(feed: Entry[], idle: boolean, userId: number, loaded: boolean) {
   const [hidden, setHidden] = useState(0)
   const seen = useRef(0)
-  const now = useRef({ feed, idle })
-  now.current = { feed, idle }
+  const shown = current(feed)
+  const now = useRef({ feed, shown, idle })
+  now.current = { feed, shown, idle }
   const last = feed[feed.length - 1]
 
   useEffect(() => {
@@ -67,8 +83,8 @@ export function useExchange(feed: Entry[], idle: boolean, userId: number, loaded
   // Coming back to a finished exchange you've seen, a while after it
   // finished, you're greeted afresh.
   const tidy = useCallback(() => {
-    const { feed: f, idle } = now.current
-    const end = f[f.length - 1]
+    const { shown: ex, idle } = now.current
+    const end = ex[ex.length - 1]
     if (idle && end && end.id <= seen.current && Date.now() - end.updatedAt > fresh) clear()
   }, [clear])
 
@@ -96,5 +112,5 @@ export function useExchange(feed: Entry[], idle: boolean, userId: number, loaded
   // A mark from before the conversation's entries were renumbered (a new
   // server) is ignored.
   const cut = last && hidden > last.id ? 0 : hidden
-  return { entries: feed.slice(exchangeStart(feed)).filter((e) => e.id > cut), clear }
+  return { entries: shown.filter((e) => e.id > cut), clear }
 }

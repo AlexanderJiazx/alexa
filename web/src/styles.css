@@ -389,6 +389,12 @@ svg.i { stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: rou
   .panel { border-radius: 16px; }
   .panel-head { padding-left: 12px; }
   .panel-body.browser { padding: 0 6px 6px; }
+  /* A page is wider than it is tall: the browser takes the height it needs
+     and the conversation fills the rest. */
+  .stage.with-browser { flex-direction: column; gap: 10px; }
+  .stage.with-browser .panel-col, .stage.with-browser .panel { flex: none; }
+  .stage.with-browser .caption { display: none; }
+  .stage.with-browser .log { display: block; flex: 1 1 auto; min-height: 0; padding-left: 0; }
   .panel-body.doc { padding: 0 18px 32px; }
   .report h1 { font-size: 26px; }
   .site, .site.control { max-width: none; }

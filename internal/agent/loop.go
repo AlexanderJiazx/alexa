@@ -29,6 +29,10 @@ const (
 // way they can see.
 const nudge = "[Alexa system note] The user can't see plain text or reasoning — only say, ask and present_report reach them. Answer their last message now with say (one or two short sentences; put anything longer in a report), then end your turn."
 
+// outOfSteps closes a stretch of work that used all its turns: Alexa tells
+// the user where things stand instead of stopping without a word.
+const outOfSteps = "[Alexa system note] That's all the steps for this stretch of work. Call no more tools except say, ask or present_report: tell the user what you've done and what's left, and that you can carry on if they want."
+
 func (rt *Runtime) loop(ctx context.Context, r *run) {
 	uid := r.user.ID
 	defer func() {
@@ -44,7 +48,12 @@ func (rt *Runtime) loop(ctx context.Context, r *run) {
 	}()
 
 	retriedOverflow := false
-	for turn := 0; turn < rt.cfg.MaxTurns; turn++ {
+	for turn := 0; ; turn++ {
+		if turn > rt.cfg.MaxTurns {
+			rt.fail(r, fmt.Errorf("stopped after %d steps without finishing", rt.cfg.MaxTurns))
+			return
+		}
+		wrapUp := turn == rt.cfg.MaxTurns
 		// Alexa keeps thinking while the user controls the browser; only
 		// browser actions wait for them to hand it back.
 		if ctx.Err() != nil {
@@ -54,6 +63,12 @@ func (rt *Runtime) loop(ctx context.Context, r *run) {
 		if err := rt.drainInbox(ctx, r); err != nil {
 			rt.fail(r, err)
 			return
+		}
+		if wrapUp {
+			if err := rt.appendMessage(ctx, uid, "system", outOfSteps, nil); err != nil {
+				rt.fail(r, err)
+				return
+			}
 		}
 		if err := rt.compact(ctx, r.user, false); err != nil {
 			slog.Warn("compaction failed", "user", uid, "err", err)
@@ -143,7 +158,7 @@ func (rt *Runtime) loop(ctx context.Context, r *run) {
 			if resp.Status == "incomplete" && strings.TrimSpace(text.String()) == "" {
 				continue // ran out of output tokens mid-thought; keep going
 			}
-			if r.shouldNudge() {
+			if !wrapUp && r.shouldNudge() {
 				if err := rt.appendMessage(ctx, uid, "system", nudge, nil); err != nil {
 					rt.fail(r, err)
 					return
@@ -156,12 +171,22 @@ func (rt *Runtime) loop(ctx context.Context, r *run) {
 			if rt.finish(r) {
 				return
 			}
-			continue // a message arrived meanwhile
+			if wrapUp {
+				turn = -1 // a message came in meanwhile: a new stretch of work
+			}
+			continue
 		}
 
 		var suspend *Needs
+		told := false
 		for _, call := range calls {
-			out := rt.execute(ctx, r, call)
+			var out *toolResult
+			if wrapUp && call.Name != "say" && call.Name != "ask" && call.Name != "present_report" {
+				out = &toolResult{Text: "Not done: no steps left for now. Tell the user where things stand."}
+			} else {
+				out = rt.execute(ctx, r, call)
+				told = told || wrapUp
+			}
 			if out.Suspend != nil {
 				if suspend == nil {
 					suspend = out.Suspend
@@ -192,11 +217,26 @@ func (rt *Runtime) loop(ctx context.Context, r *run) {
 			rt.stopped(r)
 			return
 		}
-		if suspend != nil && rt.suspend(r, suspend) {
-			return
+		if suspend != nil {
+			if rt.suspend(r, suspend) {
+				return
+			}
+			if wrapUp {
+				turn = -1 // the user had answered already: a new stretch of work
+			}
+			continue
+		}
+		if wrapUp {
+			if !told {
+				rt.fail(r, fmt.Errorf("stopped after %d steps without finishing", rt.cfg.MaxTurns))
+				return
+			}
+			if rt.finish(r) {
+				return
+			}
+			turn = -1 // a message came in meanwhile: a new stretch of work
 		}
 	}
-	rt.fail(r, fmt.Errorf("stopped after %d steps without finishing", rt.cfg.MaxTurns))
 }
 
 func (r *run) shouldNudge() bool {
@@ -255,7 +295,11 @@ func (rt *Runtime) execute(ctx context.Context, r *run, call llm.Item) (out *too
 	}
 	if s := strings.TrimSpace(str(args, "status")); s != "" {
 		rt.setStep(r, s, strings.TrimSpace(str(args, "done")))
-	} else if !tl.NoStatus && !r.hasStep() {
+	} else if tl.NoStatus {
+		// Alexa says something, asks or shows a report once the step
+		// before it is over.
+		rt.finishStep(r, "done")
+	} else if !r.hasStep() {
 		rt.setStep(r, "Working on it", "")
 	}
 	if strings.HasPrefix(call.Name, "browser_") {

@@ -167,6 +167,6 @@ func (rt *Runtime) SignIn(ctx context.Context, u *store.User, username, password
 	if err != nil {
 		return err
 	}
-	rt.launch(u, env, false)
+	rt.launch(u, env, false, false)
 	return nil
 }

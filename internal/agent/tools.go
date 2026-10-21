@@ -622,10 +622,17 @@ func runShell(tc *toolCtx, a map[string]any) (*toolResult, error) {
 	ctx, cancel := context.WithTimeout(tc.ctx, timeout)
 	defer cancel()
 	env := tc.run.env
+	// /tmp is shared by every user's commands; temporary files go to a
+	// private directory instead.
+	tmp := filepath.Join(env.Home, "tmp")
+	if err := env.MkdirAll(tmp); err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(ctx, "bash", "-c", str(a, "command"))
 	cmd.Dir = env.Workspace
 	cmd.Env = []string{
 		"HOME=" + env.Home,
+		"TMPDIR=" + tmp,
 		"PATH=" + shellPath,
 		"LANG=C.UTF-8",
 		"TZ=" + tc.run.user.Timezone,
@@ -834,7 +841,7 @@ func presentReport(tc *toolCtx, a map[string]any) (*toolResult, error) {
 	if str(a, "format") == "html" {
 		rep.Format = "html"
 	} else {
-		rep.Content = cleanText(rep.Content)
+		rep.Content = dropTitle(cleanText(rep.Content))
 	}
 	var data ReportData
 	if arr, ok := a["items"].([]any); ok {
@@ -897,6 +904,16 @@ func presentReport(tc *toolCtx, a map[string]any) (*toolResult, error) {
 		msg += " These files don't exist and were left out: " + strings.Join(missing, ", ")
 	}
 	return &toolResult{Text: msg}, nil
+}
+
+// dropTitle removes a heading the model put at the top of a report: the
+// report's title is already shown above its content.
+func dropTitle(md string) string {
+	first, rest, _ := strings.Cut(md, "\n")
+	if strings.HasPrefix(first, "# ") {
+		return strings.TrimSpace(rest)
+	}
+	return md
 }
 
 func generateImage(tc *toolCtx, a map[string]any) (*toolResult, error) {

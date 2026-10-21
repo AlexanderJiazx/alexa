@@ -338,7 +338,7 @@ export default function App() {
         </div>
       </header>
 
-      <main className={`stage${panel ? ' with-panel' : ''}${panelLeaving ? ' closing' : ''}`}>
+      <main className={`stage${panel ? ' with-panel' : ''}${panelKey === 'browser' ? ' with-browser' : ''}${panelLeaving ? ' closing' : ''}`}>
         {panel && (
           <div className="panel-col">
             {panel}

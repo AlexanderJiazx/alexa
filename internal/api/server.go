@@ -729,11 +729,23 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	name := safeName(strings.TrimSuffix(hdr.Filename, filepath.Ext(hdr.Filename))) + strings.ToLower(filepath.Ext(hdr.Filename))
+	base, ext := safeName(strings.TrimSuffix(hdr.Filename, filepath.Ext(hdr.Filename))), strings.ToLower(filepath.Ext(hdr.Filename))
 	dir := filepath.Join(env.Uploads, time.Now().Format("2006-01-02"))
 	_ = env.MkdirAll(dir)
-	full := filepath.Join(dir, uuid.NewString()[:6]+"-"+name)
-	out, err := os.Create(full)
+	// A file keeps its name, which a site Alexa uploads it to sees too; a
+	// number is added when that day already has a file by that name.
+	var full string
+	var out *os.File
+	for i := 1; ; i++ {
+		full = filepath.Join(dir, base+ext)
+		if i > 1 {
+			full = filepath.Join(dir, fmt.Sprintf("%s-%d%s", base, i, ext))
+		}
+		out, err = os.OpenFile(full, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if !errors.Is(err, fs.ErrExist) || i == 1000 {
+			break
+		}
+	}
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return

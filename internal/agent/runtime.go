@@ -80,7 +80,7 @@ type run struct {
 	released chan struct{} // closed when the user hands back control
 	awaiting bool          // the user wrote and hasn't been answered yet
 	nudged   bool          // reminded to answer through say
-	held     bool          // the user chose what their screen shows; don't switch it to the browser
+	held     bool          // the user chose what their screen shows, or this is a scheduled job: don't switch it to the browser
 }
 
 func (r *run) loc() *time.Location { return userLoc(r.user) }
@@ -257,7 +257,7 @@ func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
 	} else if err := rt.appendMessage(ctx, u.ID, kind, stamp(loc, note, text), m.Attach); err != nil {
 		return err
 	}
-	rt.launch(u, env, kind == "user")
+	rt.launch(u, env, kind == "user", kind == "schedule")
 	return nil
 }
 
@@ -334,7 +334,7 @@ func (rt *Runtime) HandBack(ctx context.Context, u *store.User, note string) err
 		if err != nil {
 			return err
 		}
-		rt.launch(u, env, false)
+		rt.launch(u, env, false, false)
 		return nil
 	}
 	if had {
@@ -494,11 +494,11 @@ func (rt *Runtime) ResumeInterrupted(ctx context.Context) {
 			continue
 		}
 		_ = rt.st.SetEntriesStatus(ctx, id, "step", "running", "failed")
-		_ = rt.st.AddInbox(ctx, id, store.InboxMessage{Kind: "system", Text: stamp(userLoc(u), "", "[The server restarted while you were working. The browser may have restarted too — re-open pages as needed and carry on.]")})
+		_ = rt.st.AddInbox(ctx, id, store.InboxMessage{Kind: "system", Text: stamp(userLoc(u), "", "[The server restarted while you were working. What you did and found before is above, so don't redo it: the browser restarted too, so re-open the page you were on and carry on from where you stopped.]")})
 		slog.Info("resuming session", "user", u.Username)
 		l := rt.userLock(id)
 		l.Lock()
-		rt.launch(u, env, true)
+		rt.launch(u, env, true, false)
 		l.Unlock()
 	}
 }
@@ -522,7 +522,9 @@ func (rt *Runtime) Shutdown() {
 // ---------- internals ----------
 
 // launch starts the agent loop for a user. The caller holds the user lock.
-func (rt *Runtime) launch(u *store.User, env *userenv.Env, awaiting bool) {
+// A background run (a scheduled job) leaves the user's screen alone until
+// it needs them.
+func (rt *Runtime) launch(u *store.User, env *userenv.Env, awaiting, background bool) {
 	rt.mu.Lock()
 	if rt.runs[u.ID] != nil {
 		rt.mu.Unlock()
@@ -531,7 +533,7 @@ func (rt *Runtime) launch(u *store.User, env *userenv.Env, awaiting bool) {
 	// Most requests touch the web; start Chrome while the model thinks.
 	rt.browsers.Prewarm(u.ID)
 	ctx, cancel := context.WithCancel(rt.baseCtx)
-	r := &run{user: u, env: env, cancel: cancel, wake: make(chan struct{}, 1), awaiting: awaiting}
+	r := &run{user: u, env: env, cancel: cancel, wake: make(chan struct{}, 1), awaiting: awaiting, held: background}
 	if rt.control[u.ID] {
 		r.released = make(chan struct{})
 	}

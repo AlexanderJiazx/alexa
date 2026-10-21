@@ -57,7 +57,11 @@ export class VoiceSession {
   private mode: 'meta' | 'webspeech' | 'record' = 'meta'
   private committed = ''
   private partial = ''
-  private recorded: Int16Array[] = []
+  private recorded: Int16Array<ArrayBuffer>[] = []
+  // keep: audio is kept for transcribing later (until a recognizer takes
+  // over). live: it goes straight to the realtime recognizer.
+  private keep = true
+  private live = false
   private finalWaiters: ((t: string) => void)[] = []
   private closed = false
 
@@ -76,15 +80,26 @@ export class VoiceSession {
       this.h.onError('Microphone access was denied')
       throw new Error('mic denied')
     }
-    try {
-      await this.startMeta()
-      return
-    } catch (e) {
-      console.warn('realtime ASR unavailable, falling back', e)
+    // Audio is kept from the first moment, so what's said while a
+    // recognizer starts (or fails to) isn't lost.
+    const audio = await this.startAudio().then(
+      () => true,
+      () => false,
+    )
+    if (audio) {
+      try {
+        await this.startMeta()
+        return
+      } catch (e) {
+        console.warn('realtime ASR unavailable, falling back', e)
+      }
     }
     if (this.startWebSpeech()) return
+    if (!audio) {
+      this.h.onError('Voice input isn’t available in this browser')
+      throw new Error('no audio')
+    }
     this.mode = 'record'
-    await this.startAudio()
   }
 
   private async startAudio() {
@@ -100,8 +115,8 @@ export class VoiceSession {
     this.node = new AudioWorkletNode(this.ctx, 'pcm24')
     this.node.port.onmessage = (e: MessageEvent<{ pcm: ArrayBuffer; level: number }>) => {
       this.h.onLevel?.(e.data.level)
-      if (this.mode === 'meta' && this.ws?.readyState === WebSocket.OPEN) this.ws.send(e.data.pcm)
-      else if (this.mode === 'record') this.recorded.push(new Int16Array(e.data.pcm))
+      if (this.live && this.ws?.readyState === WebSocket.OPEN) this.ws.send(e.data.pcm)
+      else if (this.keep) this.recorded.push(new Int16Array(e.data.pcm))
     }
     src.connect(this.node)
     // Keep the graph pulling without audible output.
@@ -121,7 +136,7 @@ export class VoiceSession {
           ws.close()
           reject(new Error('timeout'))
         }
-      }, 8000)
+      }, 4000)
       ws.onopen = () => ws.send(JSON.stringify({ type: 'start', mode: 'ENDPOINTING' }))
       ws.onerror = () => {
         if (!ready) {
@@ -147,12 +162,12 @@ export class VoiceSession {
           case 'ready':
             ready = true
             clearTimeout(timer)
-            try {
-              await this.startAudio()
-              resolve()
-            } catch (e) {
-              reject(e)
-            }
+            // What was said while connecting goes first.
+            for (const c of this.recorded) ws.send(c)
+            this.recorded = []
+            this.keep = false
+            this.live = true
+            resolve()
             break
           case 'transcript':
             this.partial = (m.transcript || '').trim()
@@ -204,6 +219,9 @@ export class VoiceSession {
     sr.interimResults = true
     sr.lang = navigator.language || 'en-US'
     sr.onresult = (e) => {
+      // It hears the user: what was kept for a fallback isn't needed.
+      this.keep = false
+      this.recorded = []
       let interim = ''
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i]
@@ -214,7 +232,20 @@ export class VoiceSession {
       this.emit()
     }
     sr.onerror = (e) => {
-      if (e.error !== 'no-speech' && e.error !== 'aborted') this.h.onError('Speech recognition error: ' + e.error)
+      if (e.error === 'no-speech' || e.error === 'aborted' || this.closed || this.mode !== 'webspeech') return
+      // The browser can't recognise speech here (no speech service in some
+      // Chromium builds, offline, the microphone not available to it):
+      // record from our own stream instead, and transcribe when the user is
+      // done.
+      if (!this.ctx) {
+        this.h.onError('Speech recognition error: ' + e.error)
+        return
+      }
+      this.mode = 'record'
+      this.keep = true
+      this.sr = undefined
+      sr.onend = null
+      sr.abort()
     }
     sr.onend = () => {
       if (!this.closed) {
@@ -248,13 +279,21 @@ export class VoiceSession {
       text = await Promise.race([done, new Promise<string>((res) => setTimeout(() => res(this.text), 1500))])
     } else if (this.mode === 'record' && this.recorded.length) {
       try {
-        text = await api.transcribe(toWav(this.recorded, 24000))
+        // Anything the browser heard before it gave up comes first.
+        text = [text, await api.transcribe(toWav(this.recorded, 24000))].filter(Boolean).join(' ')
       } catch {
         this.h.onError('Could not transcribe audio')
       }
     }
-    void this.ctx?.close()
+    this.closeAudio()
     return text.trim()
+  }
+
+  // closeAudio closes the audio graph; finish and cancel can both get here.
+  private closeAudio() {
+    const ctx = this.ctx
+    this.ctx = undefined
+    if (ctx && ctx.state !== 'closed') ctx.close().catch(() => {})
   }
 
   cancel() {
@@ -263,7 +302,7 @@ export class VoiceSession {
     this.stream?.getTracks().forEach((t) => t.stop())
     this.ws?.close()
     this.sr?.abort()
-    void this.ctx?.close()
+    this.closeAudio()
   }
 }
 

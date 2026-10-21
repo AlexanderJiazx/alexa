@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/browser"
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 )
@@ -157,7 +158,11 @@ func (m *Manager) CloseAll() {
 }
 
 func (m *Manager) launch(env UserEnv) (*Browser, error) {
-	for _, d := range []string{env.ProfileDir, env.DownloadDir} {
+	dirs := []string{env.ProfileDir, env.DownloadDir}
+	if env.HomeDir != "" {
+		dirs = append(dirs, filepath.Join(env.HomeDir, "tmp"))
+	}
+	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, err
 		}
@@ -207,7 +212,7 @@ func (m *Manager) launch(env UserEnv) (*Browser, error) {
 				cmd.SysProcAttr = &syscall.SysProcAttr{}
 			}
 			cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
-			cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+home+"/.config", "XDG_CACHE_HOME="+home+"/.cache")
+			cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+home+"/.config", "XDG_CACHE_HOME="+home+"/.cache", "TMPDIR="+home+"/tmp")
 		}))
 	}
 	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
@@ -225,6 +230,7 @@ func (m *Manager) launch(env UserEnv) (*Browser, error) {
 		rootCancel:  rootCancel,
 		tabs:        map[string]*Tab{},
 		last:        time.Now(),
+		downloads:   downloads{dir: env.DownloadDir},
 	}
 	// Normal Chrome user agent: many sites block "HeadlessChrome".
 	_ = chromedp.Run(rootCtx, chromedp.ActionFunc(func(ctx context.Context) error {
@@ -235,12 +241,24 @@ func (m *Manager) launch(env UserEnv) (*Browser, error) {
 		}
 		return nil
 	}))
-	_ = chromedp.Run(rootCtx, browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllow).WithDownloadPath(env.DownloadDir).WithEventsEnabled(true))
-	// Follow popups: when a page in one of our tabs opens a new window, the
-	// task's tab switches to it.
+	// On the browser's own session, so its download events come to the
+	// browser listener below.
+	if c := chromedp.FromContext(rootCtx); c != nil && c.Browser != nil {
+		_ = browser.SetDownloadBehavior(browser.SetDownloadBehaviorBehaviorAllowAndName).WithDownloadPath(env.DownloadDir).WithEventsEnabled(true).Do(cdp.WithExecutor(rootCtx, c.Browser))
+	}
+	// Follow popups (when a page in one of our tabs opens a new window, the
+	// task's tab switches to it, and back when it closes) and note
+	// downloads.
 	chromedp.ListenBrowser(rootCtx, func(ev any) {
-		if e, ok := ev.(*target.EventTargetCreated); ok && e.TargetInfo.Type == "page" && e.TargetInfo.OpenerID != "" {
-			go b.adoptPopup(e.TargetInfo.TargetID, e.TargetInfo.OpenerID)
+		switch e := ev.(type) {
+		case *target.EventTargetCreated:
+			if e.TargetInfo.Type == "page" && e.TargetInfo.OpenerID != "" {
+				go b.adoptPopup(e.TargetInfo.TargetID, e.TargetInfo.OpenerID)
+			}
+		case *target.EventTargetDestroyed:
+			go b.targetGone(e.TargetID)
+		case *browser.EventDownloadWillBegin, *browser.EventDownloadProgress:
+			b.downloads.event(e)
 		}
 	})
 	slog.Info("browser launched", "user", env.UserID, "product", b.product)
@@ -264,6 +282,8 @@ type Browser struct {
 	// opening serialises tab creation, so the agent and a live view asking
 	// for the same tab at once get one tab, not two.
 	opening sync.Mutex
+
+	downloads downloads
 }
 
 func (b *Browser) touch() {
@@ -379,6 +399,20 @@ func (b *Browser) adoptPopup(targetID, openerID target.ID) {
 	if err := owner.switchTo(ctx, cancel); err != nil {
 		slog.Warn("adopt popup failed", "err", err)
 		cancel()
+	}
+}
+
+// targetGone drops a popup that closed (the page called window.close, say)
+// from the tab it belongs to, which goes back to the page that opened it.
+func (b *Browser) targetGone(id target.ID) {
+	b.mu.Lock()
+	tabs := make([]*Tab, 0, len(b.tabs))
+	for _, t := range b.tabs {
+		tabs = append(tabs, t)
+	}
+	b.mu.Unlock()
+	for _, t := range tabs {
+		t.dropPopup(id)
 	}
 }
 
