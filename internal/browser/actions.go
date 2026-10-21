@@ -10,6 +10,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -99,7 +100,7 @@ func (t *Tab) state() (*State, error) {
 	if d := t.pendingDialog(); d != nil {
 		// The page is paused: no scripts and no screenshot until it's answered.
 		u, title := t.URL()
-		return &State{URL: u, Title: title, Text: fmt.Sprintf("URL: %s\nTitle: %s\n\n%s\n", u, title, d.describe())}, nil
+		return &State{URL: t.Redact(u), Title: t.Redact(title), Text: t.Redact(fmt.Sprintf("URL: %s\nTitle: %s\n\n%s\n", u, title, d.describe()))}, nil
 	}
 	p := t.active()
 	var ix indexResult
@@ -159,7 +160,7 @@ func (t *Tab) state() (*State, error) {
 	if ix.Text != "" {
 		fmt.Fprintf(&b, "\nVisible text:\n%s\n", ix.Text)
 	}
-	return &State{URL: ix.URL, Title: ix.Title, Text: b.String(), Screenshot: annotated}, nil
+	return &State{URL: t.Redact(ix.URL), Title: t.Redact(ix.Title), Text: t.Redact(b.String()), Screenshot: annotated}, nil
 }
 
 // ref finds element idx of the latest state.
@@ -236,7 +237,7 @@ func (t *Tab) Click(idx int) (string, error) {
 		return "", fmt.Errorf("element [%d] is a dropdown <select>; use browser_select with the option text instead", idx)
 	}
 	time.Sleep(120 * time.Millisecond)
-	t.setCursor(x, y, true)
+	t.setCursor(x, y, true, true)
 	if err := t.mouseClick(x, y, input.Left, 1); err != nil {
 		return "", err
 	}
@@ -249,7 +250,7 @@ func (t *Tab) ClickXY(x, y float64, double bool) error {
 	if err := t.blocked(); err != nil {
 		return err
 	}
-	t.setCursor(x, y, true)
+	t.setCursor(x, y, true, true)
 	n := int64(1)
 	if double {
 		n = 2
@@ -301,7 +302,7 @@ func (t *Tab) Type(idx int, text string, clear, submit bool) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		t.setCursor(x, y, true)
+		t.setCursor(x, y, true, true)
 		if err := t.mouseClick(x, y, input.Left, 1); err != nil {
 			return "", err
 		}
@@ -652,7 +653,7 @@ func (t *Tab) Read(offset, limit int) (string, int, error) {
 	if err != nil {
 		md = doc
 	}
-	md = collapseBlank(md)
+	md = t.Redact(collapseBlank(md))
 	total := len(md)
 	if offset > total {
 		offset = total
@@ -686,7 +687,7 @@ func (t *Tab) Hover(idx int, x, y float64) error {
 			return err
 		}
 	}
-	t.setCursor(x, y, false)
+	t.setCursor(x, y, false, true)
 	if err := t.input(10*time.Second, input.DispatchMouseEvent(input.MouseMoved, x, y)); err != nil {
 		return err
 	}
@@ -732,8 +733,11 @@ func (t *Tab) Drag(fromIdx int, fx, fy float64, toIdx int, tx, ty float64) error
 	})
 	_ = t.run(5*time.Second, input.SetInterceptDrags(true))
 	defer func() { _ = t.run(5*time.Second, input.SetInterceptDrags(false)) }()
-	t.setCursor(fx, fy, false)
+	t.setCursor(fx, fy, false, true)
+	// The pointer in the live view glides to the drop point while the mouse
+	// really moves there, over the same time.
 	const steps = 12
+	pace := max(glide(math.Hypot(tx-fx, ty-fy))/steps, 20*time.Millisecond)
 	err = t.input(20*time.Second, chromedp.ActionFunc(func(ctx context.Context) error {
 		if err := input.DispatchMouseEvent(input.MouseMoved, fx, fy).Do(ctx); err != nil {
 			return err
@@ -741,12 +745,13 @@ func (t *Tab) Drag(fromIdx int, fx, fy float64, toIdx int, tx, ty float64) error
 		if err := input.DispatchMouseEvent(input.MousePressed, fx, fy).WithButton(input.Left).WithButtons(1).WithClickCount(1).Do(ctx); err != nil {
 			return err
 		}
+		t.setCursor(tx, ty, false, false)
 		for i := 1; i <= steps; i++ {
 			x, y := fx+(tx-fx)*float64(i)/steps, fy+(ty-fy)*float64(i)/steps
 			if err := input.DispatchMouseEvent(input.MouseMoved, x, y).WithButton(input.Left).WithButtons(1).Do(ctx); err != nil {
 				return err
 			}
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(pace)
 		}
 		return nil
 	}))
@@ -758,7 +763,7 @@ func (t *Tab) Drag(fromIdx int, fx, fy float64, toIdx int, tx, ty float64) error
 	case data = <-got:
 	case <-time.After(250 * time.Millisecond):
 	}
-	t.setCursor(tx, ty, true)
+	t.setCursor(tx, ty, true, false)
 	err = t.input(10*time.Second, chromedp.ActionFunc(func(ctx context.Context) error {
 		if data != nil {
 			for _, typ := range []input.DispatchDragEventType{input.DragEnter, input.DragOver, input.Drop} {

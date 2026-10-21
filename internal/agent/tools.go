@@ -279,6 +279,7 @@ func (rt *Runtime) buildTools() []*tool {
 					return nil, err
 				}
 				u, title := tab.URL()
+				u, title = tab.Redact(u), tab.Redact(title)
 				more := ""
 				if off+len(md) < total {
 					more = fmt.Sprintf("\n\n[Showing %d–%d of %d characters. Call browser_read with offset=%d for more.]", off, off+len(md), total, off+len(md))
@@ -286,9 +287,11 @@ func (rt *Runtime) buildTools() []*tool {
 				return &toolResult{Text: fmt.Sprintf("# %s\n%s\n\n%s%s", title, u, md, more), Kind: "long"}, nil
 			},
 		},
+		browserLoginTool(),
+		requestLoginTool(),
 		{
 			Name:        "request_takeover",
-			Description: "Pause and ask the user to take over the shared browser — for signing in, passwords, 2FA codes, CAPTCHAs, payment details, or anything only they can do on the page. Their screen switches to the browser. You resume when they hand back control.",
+			Description: "Pause and ask the user to take over the shared browser — for 2FA codes, CAPTCHAs, payment details, or anything else only they can do on the page (for signing in, use browser_login and request_login). Their screen switches to the browser. You resume when they hand back control.",
 			Params:      map[string]any{"reason": p("string", "Short instruction shown to the user, e.g. \"Sign in to continue\"")},
 			Required:    []string{"reason"},
 			Run: func(tc *toolCtx, a map[string]any) (*toolResult, error) {

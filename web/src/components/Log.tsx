@@ -2,16 +2,20 @@ import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from 'rea
 import type { Entry, SessionState } from '../lib/api'
 import { api, clock, day, elapsed } from '../lib/api'
 import { Alert, Check, Chevron, Close, Eye, File, HandBack, Pointer, Stop, Wave, You } from './Icons'
+import { LoginForm } from './Login'
 
 export const thinkAnim = 'wThink 1.1s ease-in-out infinite'
 export const waitAnim = 'wWait 2.4s ease-in-out infinite'
 
 type Props = {
-  feed: Entry[]
+  entries: Entry[]
   state: SessionState
-  hasMore: boolean
-  greeting: string
-  onMore: () => void
+  // now: the current exchange, on the main screen; history: the whole
+  // conversation, in Reflect.
+  mode: 'now' | 'history'
+  hasMore?: boolean
+  greeting?: string
+  onMore?: () => void
   onAnswer: (text: string) => void
   onTakeOver: () => void
   onHandBack: () => void
@@ -25,11 +29,11 @@ type Block = { key: string; time?: number; entry?: Entry; steps?: Entry[] }
 // A pause this long between entries gets a time divider.
 const gap = 45 * 60e3
 
-function toBlocks(feed: Entry[]): Block[] {
+function toBlocks(entries: Entry[], lead: boolean): Block[] {
   const out: Block[] = []
   let prev = 0
-  for (const e of feed) {
-    if (!prev || e.createdAt - prev > gap) out.push({ key: `t${e.id}`, time: e.createdAt })
+  for (const e of entries) {
+    if (prev ? e.createdAt - prev > gap : lead) out.push({ key: `t${e.id}`, time: e.createdAt })
     prev = e.createdAt
     const last = out[out.length - 1]
     if (e.kind === 'step') {
@@ -42,23 +46,26 @@ function toBlocks(feed: Entry[]): Block[] {
   return out
 }
 
-// Log is the one ongoing conversation: what the user said, what Alexa said
-// (only through its say tool), its questions and reports, and the steps it
-// took in between, folded away once done.
+// Log shows the conversation: what the user said, what Alexa said (only
+// through its say tool), its questions and reports, and the steps it took
+// in between, folded away once done. On the main screen it's only the
+// current exchange; Reflect has all of it.
 export function Log(p: Props) {
-  const { feed, state } = p
+  const { entries, state, mode } = p
   const box = useRef<HTMLDivElement>(null)
   const atBottom = useRef(true)
   const prev = useRef({ first: 0, height: 0 })
-  const blocks = toBlocks(feed)
-  const working = state.status === 'working'
+  const now = mode === 'now'
+  // The current exchange gets its time only when it isn't from just now.
+  const blocks = toBlocks(entries, !now || (entries.length > 0 && Date.now() - entries[0].createdAt > 60 * 60e3))
+  const working = now && state.status === 'working'
 
   // Stay pinned to the newest entry unless the user scrolled up; keep the
   // view steady when older entries load above.
   useLayoutEffect(() => {
     const el = box.current
     if (!el) return
-    const first = feed[0]?.id || 0
+    const first = entries[0]?.id || 0
     if (prev.current.first && first < prev.current.first) el.scrollTop += el.scrollHeight - prev.current.height
     else if (atBottom.current) el.scrollTop = el.scrollHeight
     prev.current = { first, height: el.scrollHeight }
@@ -79,9 +86,9 @@ export function Log(p: Props) {
             Show earlier
           </button>
         )}
-        {feed.length === 0 && !working && (
+        {entries.length === 0 && !working && (
           <div className="idle">
-            <p className="greet">{p.greeting}</p>
+            <p className={now ? 'greet' : 'empty-note'}>{now ? p.greeting : 'Nothing here yet. Your conversations with Alexa will show up here.'}</p>
           </div>
         )}
         {blocks.map((b, i) => (
@@ -110,7 +117,10 @@ export function Log(p: Props) {
   )
 }
 
-function Item({ e, state, onAnswer, onTakeOver, onHandBack, onStop, onOpenReport }: Props & { e: Entry }) {
+function Item({ e, state, mode, onAnswer, onTakeOver, onHandBack, onStop, onOpenReport }: Props & { e: Entry }) {
+  // Questions still waiting can be answered on the main screen; Reflect
+  // shows them as they were asked.
+  const open = e.status === 'open' && mode === 'now'
   switch (e.kind) {
     case 'user':
       return (
@@ -132,7 +142,7 @@ function Item({ e, state, onAnswer, onTakeOver, onHandBack, onStop, onOpenReport
       )
     case 'ask': {
       const opts = e.data?.options || []
-      if (e.status !== 'open') return <div className="msg agent"><p>{e.text}</p></div>
+      if (!open) return <div className="msg agent"><p>{e.text}</p></div>
       return (
         <section className="ask" aria-label="Alexa is asking">
           <p className="q">{e.text}</p>
@@ -155,7 +165,7 @@ function Item({ e, state, onAnswer, onTakeOver, onHandBack, onStop, onOpenReport
       )
     }
     case 'takeover':
-      if (e.status !== 'open') return <div className="msg agent muted"><p>{e.text}</p></div>
+      if (!open) return <div className="msg agent muted"><p>{e.text}</p></div>
       return (
         <section className="ask" aria-label="Alexa needs you in the browser">
           <div className="eyebrow">
@@ -181,6 +191,9 @@ function Item({ e, state, onAnswer, onTakeOver, onHandBack, onStop, onOpenReport
           </div>
         </section>
       )
+    case 'login':
+      if (!open) return <div className="msg agent muted"><p>{e.text}</p></div>
+      return <LoginForm site={e.data?.site || ''} username={e.data?.username} reason={e.text} control={state.control} onTakeOver={onTakeOver} onHandBack={onHandBack} onStop={onStop} />
     case 'report': {
       const id = e.data?.id
       return (
@@ -255,7 +268,8 @@ function StepLines({ steps }: { steps: Entry[] }) {
   return (
     <ol className="steps">
       {steps.map((s) => {
-        const you = s.text === 'You took over'
+        // Steps the user took themselves: "You took over", "You entered your login for …".
+        const you = s.text.startsWith('You ')
         return (
           <li key={s.id}>
             <span className="ic">{you ? <You size={13} /> : s.status === 'failed' ? <Close size={13} /> : <Check size={13} />}</span>

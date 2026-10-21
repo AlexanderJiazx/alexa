@@ -10,7 +10,10 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +29,7 @@ import (
 	"alexagent/internal/notify"
 	"alexagent/internal/store"
 	"alexagent/internal/userenv"
+	"alexagent/internal/vault"
 	"alexagent/internal/voice"
 )
 
@@ -163,9 +167,26 @@ type testEnv struct {
 	model *fakeModel
 }
 
-func newTestServer(t *testing.T) *testEnv {
+// newTestServer starts Alexa against a fake model. Without a chrome path,
+// any browser it starts fails fast and harmlessly.
+func newTestServer(t *testing.T, chrome ...string) *testEnv {
 	t.Helper()
 	dir := t.TempDir()
+	chromePath := filepath.Join(dir, "no-chrome")
+	if len(chrome) > 0 {
+		chromePath = chrome[0]
+		// Chrome's helpers can still be writing to its profile for a moment
+		// after it's closed; t.TempDir would fail the test over that.
+		var err error
+		if dir, err = os.MkdirTemp("", "alexa-api-test-"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			for i := 0; i < 10 && os.RemoveAll(dir) != nil; i++ {
+				time.Sleep(200 * time.Millisecond)
+			}
+		})
+	}
 	t.Setenv("DATA_DIR", dir)
 	t.Setenv("META_MODEL_API_KEY", "test")
 	t.Setenv("SANDBOX_UIDS", "false")
@@ -185,14 +206,17 @@ func newTestServer(t *testing.T) *testEnv {
 		t.Fatal(err)
 	}
 	envs := userenv.New(dir, false, 0)
-	// No Chrome in these tests: starting it fails fast and harmlessly.
-	br := browser.NewManager(browser.Options{ChromePath: filepath.Join(dir, "no-chrome"), Headless: true, Width: 1280, Height: 800}, func(id int64) browser.UserEnv {
+	br := browser.NewManager(browser.Options{ChromePath: chromePath, Headless: true, Width: 1280, Height: 800}, func(id int64) browser.UserEnv {
 		e := envs.For(id)
 		return browser.UserEnv{UserID: id, ProfileDir: e.Profile, DownloadDir: e.Downloads, HomeDir: e.Home}
 	}, nil)
-	rt := agent.New(ctx, cfg, st, llm.New(cfg.BaseURL, cfg.APIKey), br, envs, h, n)
+	v, err := vault.Open(filepath.Join(dir, "vault.key"), st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := agent.New(ctx, cfg, st, llm.New(cfg.BaseURL, cfg.APIKey), br, envs, h, n, v)
 	static := fstest.MapFS{"index.html": {Data: []byte("<html>alexa</html>")}}
-	srv := httptest.NewServer(New(cfg, st, rt, h, envs, n, &voice.Service{}, br, static).Handler())
+	srv := httptest.NewServer(New(cfg, st, rt, h, envs, n, &voice.Service{}, br, v, static).Handler())
 	t.Cleanup(func() { srv.Close(); rt.Shutdown(); br.CloseAll(); cancel(); st.Close() })
 	return &testEnv{srv: srv, st: st, envs: envs, cfg: cfg, model: fm}
 }
@@ -755,6 +779,275 @@ func TestAuthAndIsolation(t *testing.T) {
 	alice.do("POST", "/api/auth/logout", nil, true)
 	if code, _, _ := alice.do("GET", "/api/me", nil, false); code != 401 {
 		t.Fatalf("after logout /api/me = %d, want 401", code)
+	}
+}
+
+// TestSignIn covers the secure sign-in form: Alexa asks, the user types
+// their login into the app, it's saved encrypted, and Alexa carries on
+// without ever seeing the password.
+func TestSignIn(t *testing.T) {
+	e := newTestServer(t)
+	fm := e.model
+	alice := e.client(t)
+	alice.signup("alice")
+	const password = "s3cret-Pa55word"
+
+	if code, _, _ := alice.do("POST", "/api/signin", map[string]any{"username": "a", "password": "b", "save": true}, true); code != 409 {
+		t.Fatalf("a login nobody asked for = %d, want 409", code)
+	}
+	fm.script(reply(1000, fn("request_login", map[string]any{"reason": "Your Example session expired", "site": "https://www.example.com/login"})))
+	alice.send("check my example.com orders")
+	s := alice.wait("needs")
+	if s.State.Needs == nil || s.State.Needs.Kind != "login" || s.State.Surface.Kind != "browser" {
+		t.Fatalf("needs %+v, surface %+v", s.State.Needs, s.State.Surface)
+	}
+	var needs struct {
+		State struct {
+			Needs struct {
+				Site string `json:"site"`
+			} `json:"needs"`
+		} `json:"state"`
+	}
+	_, raw := alice.raw("GET", "/api/session", nil, false)
+	if json.Unmarshal(raw, &needs); needs.State.Needs.Site != "example.com" {
+		t.Fatalf("asked to sign in to %q", needs.State.Needs.Site)
+	}
+	if card := last(s.Feed, "login"); card == nil || card.Status != "open" || !strings.Contains(string(card.Data), `"site":"example.com"`) {
+		t.Fatalf("login card = %+v", card)
+	}
+
+	fm.script(
+		func(_ context.Context, req *llm.Request) ([]any, int64) {
+			in := inputText(req)
+			if !strings.Contains(in, "entered their login for example.com") || !strings.Contains(in, "alice@example.com") || !strings.Contains(in, "browser_login") {
+				t.Errorf("Alexa wasn't told about the login: …%s", tail(in, 400))
+			}
+			return []any{fn("say", map[string]any{"text": "Signed in."})}, 1100
+		},
+		reply(1200),
+	)
+	if code, m, _ := alice.do("POST", "/api/signin", map[string]any{"username": " alice@example.com ", "password": password, "save": true}, true); code != 200 {
+		t.Fatalf("sign in: %d %v", code, m)
+	}
+	s = alice.wait("idle")
+	if card := last(s.Feed, "login"); card.Status != "answered" {
+		t.Fatalf("login card still %q", card.Status)
+	}
+	if st := last(s.Feed, "step"); st == nil || st.Text != "You entered your login for example.com" {
+		t.Fatalf("step = %+v", st)
+	}
+
+	// Saved, encrypted, and never shown again: not to the model, not in the
+	// conversation, not by the API.
+	code, list := alice.raw("GET", "/api/logins", nil, false)
+	if code != 200 || !bytes.Contains(list, []byte(`"site":"example.com"`)) || !bytes.Contains(list, []byte(`"username":"alice@example.com"`)) {
+		t.Fatalf("logins: %d %s", code, list)
+	}
+	_, feed := alice.raw("GET", "/api/session", nil, false)
+	for what, b := range map[string][]byte{"the logins list": list, "the session": feed} {
+		if bytes.Contains(b, []byte(password)) {
+			t.Errorf("%s shows the password", what)
+		}
+	}
+	for i, req := range fm.reqs {
+		if strings.Contains(inputText(req), password) || strings.Contains(req.Instructions, password) {
+			t.Errorf("model call %d was sent the password", i)
+		}
+	}
+	au, _ := e.st.GetUserByName(context.Background(), "alice")
+	saved, _ := e.st.Logins(context.Background(), au.ID)
+	if len(saved) != 1 || bytes.Contains(saved[0].Secret, []byte(password)) {
+		t.Fatalf("stored logins: %d, in the clear: %v", len(saved), len(saved) == 1 && bytes.Contains(saved[0].Secret, []byte(password)))
+	}
+
+	// Asked again (say the password was rejected), the form suggests the
+	// account; answering in a message instead goes to Alexa as a reply.
+	fm.script(reply(1300, fn("request_login", map[string]any{"reason": "That password didn't work", "site": "example.com"})))
+	alice.send("try again")
+	alice.wait("needs")
+	_, raw = alice.raw("GET", "/api/session", nil, false)
+	if !bytes.Contains(raw, []byte(`"username":"alice@example.com"`)) {
+		t.Fatalf("the form doesn't suggest the saved account: %s", raw)
+	}
+	fm.script(
+		expect(t, []string{"didn't enter their login and replied instead: never mind"}, fn("say", map[string]any{"text": "Okay."})),
+		reply(1400),
+	)
+	alice.send("never mind")
+	alice.wait("idle")
+
+	// A login entered without saving is only used for this sign-in.
+	fm.script(reply(1500, fn("request_login", map[string]any{"reason": "Sign in to GitHub", "site": "github.com"})))
+	alice.send("star my repo")
+	alice.wait("needs")
+	fm.script(
+		expect(t, []string{"chose not to save it"}, fn("say", map[string]any{"text": "Done."})),
+		reply(1600),
+	)
+	alice.post("/api/signin", map[string]any{"username": "alice", "password": "gh-pass-1", "save": false})
+	alice.wait("idle")
+	if _, _, arr := alice.do("GET", "/api/logins", nil, false); len(arr) != 1 {
+		t.Fatalf("logins after an unsaved sign-in = %d, want 1", len(arr))
+	}
+
+	// Managing logins in the app.
+	code, m, _ := alice.do("POST", "/api/logins", map[string]any{"site": "https://github.com/login", "username": "alice", "password": "gh-pass-2"}, true)
+	if code != 200 || m["site"] != "github.com" || m["password"] != nil || m["secret"] != nil {
+		t.Fatalf("add login: %d %v", code, m)
+	}
+	gh := fmt.Sprint(int64(m["id"].(float64)))
+	if code, m, _ := alice.do("POST", "/api/logins", map[string]any{"site": "github", "username": "x", "password": "y"}, true); code != 400 {
+		t.Fatalf("a login for %q = %d %v, want 400", "github", code, m)
+	}
+	if code, m, _ := alice.do("PUT", "/api/logins/"+gh, map[string]any{"username": "alice-work"}, true); code != 200 || m["username"] != "alice-work" {
+		t.Fatalf("rename: %d %v", code, m)
+	}
+	alice.post("/api/logins", map[string]any{"site": "github.com", "username": "alice", "password": "z"})
+	if code, _, _ := alice.do("PUT", "/api/logins/"+gh, map[string]any{"username": "alice"}, true); code != 409 {
+		t.Fatalf("rename onto another login = %d, want 409", code)
+	}
+
+	// Bob can't see or touch them.
+	bob := e.client(t)
+	alice.post("/api/admin/users", map[string]any{"username": "bob", "password": "password2"})
+	bob.post("/api/auth/login", map[string]any{"username": "bob", "password": "password2"})
+	if _, _, arr := bob.do("GET", "/api/logins", nil, false); len(arr) != 0 {
+		t.Fatalf("bob sees %d of alice's logins", len(arr))
+	}
+	for _, method := range []string{"PUT", "DELETE"} {
+		if code, _, _ := bob.do(method, "/api/logins/"+gh, map[string]any{"password": "pwned"}, true); code != 404 {
+			t.Errorf("bob %s alice's login = %d, want 404", method, code)
+		}
+	}
+	if code, _, _ := alice.do("DELETE", "/api/logins/"+gh, nil, true); code != 200 {
+		t.Fatalf("delete = %d", code)
+	}
+	if code, _, _ := alice.do("DELETE", "/api/logins/"+gh, nil, true); code != 404 {
+		t.Fatalf("delete again = %d, want 404", code)
+	}
+}
+
+// findChrome returns a Chrome to run, or skips the test.
+func findChrome(t *testing.T) string {
+	t.Helper()
+	if os.Getenv("SKIP_BROWSER_TESTS") != "" {
+		t.Skip("browser tests disabled")
+	}
+	if p := os.Getenv("CHROME_PATH"); p != "" {
+		return p
+	}
+	for _, name := range []string{"google-chrome", "chromium", "chromium-browser"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	t.Skip("no Chrome to run")
+	return ""
+}
+
+// TestBrowserLogin signs in to a site with a real browser: with no saved
+// login Alexa asks for one, the user enters it in the app, and Alexa fills
+// in the site's form without ever seeing the password.
+func TestBrowserLogin(t *testing.T) {
+	chrome := findChrome(t)
+	const password = "Tr0ub4dor-3-horse"
+	site := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `<!doctype html><title>Sign in</title><body>
+			<form onsubmit="event.preventDefault(); out.textContent = 'Welcome ' + user.value + (pass.value === '%s' ? ', right password' : ', wrong password')">
+			<input id=user type=email placeholder="Email"> <input id=pass type=password placeholder="Password"> <button>Sign in</button></form><p id=out></p>`, password)
+	}))
+	defer site.Close()
+	e := newTestServer(t, chrome)
+	fm := e.model
+	c := e.client(t)
+	c.signup("frank")
+	// field finds an input's index in the latest page state Alexa was sent
+	// (as JSON, where "<" is escaped).
+	field := func(req *llm.Request, typ string) int {
+		m := regexp.MustCompile(`\[(\d+)\] (?:<|\\u003c)input type=`+typ).FindAllStringSubmatch(inputText(req), -1)
+		if len(m) == 0 {
+			t.Errorf("no %s field in the page state: …%s", typ, tail(inputText(req), 600))
+			return 0
+		}
+		n, _ := strconv.Atoi(m[len(m)-1][1])
+		return n
+	}
+	login := func(submit bool) turn {
+		return func(_ context.Context, req *llm.Request) ([]any, int64) {
+			return []any{fn("browser_login", map[string]any{"username_index": field(req, "email"), "password_index": field(req, "password"), "submit": submit, "status": "Signing in"})}, 900
+		}
+	}
+	fm.script(
+		reply(900, fn("browser_open", map[string]any{"url": site.URL, "status": "Opening the site"})),
+		login(false),
+		expect(t, []string{"no saved login for 127.0.0.1", "request_login"}, fn("request_login", map[string]any{"reason": "Sign in to the test site"})),
+	)
+	c.send("sign in to the test site")
+	if s := c.wait("needs"); s.State.Needs == nil || s.State.Needs.Kind != "login" {
+		t.Fatalf("needs = %+v", s.State.Needs)
+	}
+	fm.script(
+		login(true),
+		func(_ context.Context, req *llm.Request) ([]any, int64) {
+			if in := inputText(req); !strings.Contains(in, "Welcome frank@example.com, right password") || !strings.Contains(in, "Filled in the username and password") {
+				t.Errorf("not signed in: …%s", tail(in, 1500))
+			}
+			return []any{fn("say", map[string]any{"text": "Signed in."})}, 900
+		},
+		reply(900),
+	)
+	c.post("/api/signin", map[string]any{"username": "frank@example.com", "password": password, "save": true})
+	c.wait("idle")
+	for i, req := range fm.reqs {
+		if strings.Contains(inputText(req), password) {
+			t.Errorf("model call %d was sent the password", i)
+		}
+	}
+}
+
+// The app shows the current exchange: it starts with a message that set
+// Alexa to work while it was idle, not with one sent while it worked or one
+// answering its question.
+func TestExchangeStart(t *testing.T) {
+	e := newTestServer(t)
+	fm := e.model
+	c := e.client(t)
+	c.signup("erin")
+	starts := func(s session, text string) bool {
+		t.Helper()
+		for _, en := range s.Feed {
+			if en.Text == text {
+				return strings.Contains(string(en.Data), `"start":true`)
+			}
+		}
+		t.Fatalf("no entry %q", text)
+		return false
+	}
+	gate := make(chan struct{})
+	fm.script(
+		func(ctx context.Context, _ *llm.Request) ([]any, int64) {
+			select {
+			case <-gate:
+			case <-ctx.Done():
+			}
+			return []any{fn("say", map[string]any{"text": "On it."})}, 900
+		},
+		expect(t, []string{"for two"}, fn("ask", map[string]any{"question": "Which date?"})),
+	)
+	c.send("book a table")
+	c.send("for two")
+	close(gate)
+	c.wait("needs")
+	fm.script(reply(900, fn("say", map[string]any{"text": "Booked."})), reply(900))
+	c.send("Friday")
+	s := c.wait("idle")
+	if !starts(s, "book a table") || starts(s, "for two") || starts(s, "Friday") {
+		t.Fatalf("starts: %v %v %v", starts(s, "book a table"), starts(s, "for two"), starts(s, "Friday"))
+	}
+	fm.script(reply(900, fn("say", map[string]any{"text": "Hi."})), reply(900))
+	c.send("thanks")
+	if s := c.wait("idle"); !starts(s, "thanks") {
+		t.Fatal("a new request doesn't start an exchange")
 	}
 }
 

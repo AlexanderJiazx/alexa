@@ -27,6 +27,7 @@ import (
 	"alexagent/internal/notify"
 	"alexagent/internal/store"
 	"alexagent/internal/userenv"
+	"alexagent/internal/vault"
 	"alexagent/internal/voice"
 	"alexagent/web"
 )
@@ -80,6 +81,10 @@ func main() {
 	if cfg.APIKey == "" {
 		fatal("config", errors.New("META_MODEL_API_KEY is not set"))
 	}
+	logins, err := vault.Open(cfg.VaultKeyFile, st)
+	if err != nil {
+		fatal("open the login vault", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -115,7 +120,7 @@ func main() {
 	})
 	defer br.CloseAll()
 
-	rt = agent.New(ctx, cfg, st, client, br, envs, h, notifier)
+	rt = agent.New(ctx, cfg, st, client, br, envs, h, notifier, logins)
 	rt.Scheduler().Start(ctx)
 	rt.ResumeInterrupted(ctx)
 
@@ -126,7 +131,7 @@ func main() {
 	vs := &voice.Service{BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Model: cfg.ASRModel}
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           api.New(cfg, st, rt, h, envs, notifier, vs, br, static).Handler(),
+		Handler:           api.New(cfg, st, rt, h, envs, notifier, vs, br, logins, static).Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 	go func() {

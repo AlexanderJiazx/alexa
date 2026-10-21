@@ -5,6 +5,7 @@ import type { Entry, Report, SessionState } from '../lib/api'
 import { ago, api, hostOf } from '../lib/api'
 import { Calendar, Check, Close, Download, File, Globe, HandBack, LinkIcon, Pointer, Stop, Wave } from './Icons'
 import { LiveScreen, type Cursor } from './LiveScreen'
+import { LoginForm } from './Login'
 import { thinkAnim, waitAnim } from './Log'
 
 export type Live = { url: string; cursor: Cursor | null }
@@ -21,13 +22,14 @@ type BrowserProps = {
 }
 
 export function BrowserPanel({ state, live, onTakeOver, onHandBack, onClose, onUrl }: BrowserProps) {
-  const takeover = state.status === 'needs' && state.needs?.kind === 'takeover'
+  const nd = state.status === 'needs' ? state.needs : null
+  const takeover = nd?.kind === 'takeover'
   const working = state.status === 'working'
-  const title = state.control ? 'You’re in control' : takeover ? state.needs!.message : working ? state.activity || 'Working on it' : hostOf(live.url || state.browserUrl || '') || 'Browser'
+  const title = state.control ? 'You’re in control' : takeover ? nd!.message : nd?.kind === 'login' ? `Sign in to ${nd.site}` : working ? state.activity || 'Working on it' : hostOf(live.url || state.browserUrl || '') || 'Browser'
   return (
     <section className="panel" aria-label="Shared browser">
       <div className="panel-head">
-        <span className="panel-ic">{state.control ? <Pointer size={17} /> : working ? <Wave size="small" anim={thinkAnim} /> : takeover ? <Wave size="small" anim={waitAnim} /> : <Globe size={17} />}</span>
+        <span className="panel-ic">{state.control ? <Pointer size={17} /> : working ? <Wave size="small" anim={thinkAnim} /> : nd && nd.kind !== 'question' ? <Wave size="small" anim={waitAnim} /> : <Globe size={17} />}</span>
         <span className="title" aria-live="polite">
           {title}
         </span>
@@ -234,6 +236,8 @@ export function Caption({ state, latest, onAnswer, onTakeOver, onHandBack, onSto
         )}
       </div>
     )
+  if (nd?.kind === 'login')
+    return <LoginForm compact site={nd.site || ''} username={nd.username} reason={nd.message} control={state.control} onTakeOver={onTakeOver} onHandBack={onHandBack} onStop={onStop} />
   if (nd?.kind === 'takeover')
     return (
       <div className="caption">

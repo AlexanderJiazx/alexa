@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Auth } from './components/Auth'
 import { Composer } from './components/Composer'
+import { History } from './components/Icons'
 import { Log } from './components/Log'
 import { BrowserPanel, Caption, ReportPanel, type Live } from './components/Panels'
-import { AccountMenu, FilesSheet, MemorySheet, NotificationsSheet, ReportsSheet, SchedulesSheet, SettingsSheet, UsersSheet, type SheetName } from './components/Sheets'
+import { Reflect, type ReflectTab } from './components/Reflect'
+import { AccountMenu, LoginsSheet, MemorySheet, NotificationsSheet, SchedulesSheet, SettingsSheet, UsersSheet, type SheetName } from './components/Sheets'
 import type { Attachment, Entry, Notification, Report, ServerConfig, SessionState, Surface, User } from './lib/api'
 import { api, ApiError } from './lib/api'
 import { useEvents, type ServerEvent } from './lib/events'
+import { useExchange } from './lib/exchange'
+import { useExit } from './lib/useExit'
 import { speak } from './lib/voice'
 
 type Toast = { id: number; title: string; body: string }
@@ -40,6 +44,7 @@ export default function App() {
   const [config, setConfig] = useState<ServerConfig | null>(null)
   const [state, setState] = useState<SessionState>(blank)
   const [feed, setFeed] = useState<Entry[]>([])
+  const [loaded, setLoaded] = useState(false)
   const [hasMore, setHasMore] = useState(false)
   const [reports, setReports] = useState<Record<string, Report>>({})
   const [live, setLive] = useState<Live>({ url: '', cursor: null })
@@ -47,6 +52,8 @@ export default function App() {
   const [heard, setHeard] = useState({ committed: '', partial: '' })
   const [menu, setMenu] = useState(false)
   const [sheet, setSheet] = useState<SheetName | null>(null)
+  const [reflect, setReflect] = useState(false)
+  const [reflectTab, setReflectTab] = useState<ReflectTab>('conversation')
   const [notes, setNotes] = useState<Notification[]>([])
   const [toasts, setToasts] = useState<Toast[]>([])
   // After the user speaks, Alexa's replies are read aloud.
@@ -88,6 +95,26 @@ export default function App() {
     setHasMore(s.hasMore)
     if (s.report) setReports((m) => ({ ...m, [s.report!.id]: s.report! }))
     setNotes(ns)
+    setLoaded(true)
+  }, [])
+
+  // Reflect opens as a page of its own, so the browser's back button
+  // closes it.
+  const openReflect = (tab?: ReflectTab) => {
+    if (tab) setReflectTab(tab)
+    setMenu(false)
+    setSheet(null)
+    if (!history.state?.reflect) history.pushState({ reflect: true }, '')
+    setReflect(true)
+  }
+  const closeReflect = useCallback(() => {
+    if (history.state?.reflect) history.back()
+    else setReflect(false)
+  }, [])
+  useEffect(() => {
+    const onPop = () => setReflect(!!history.state?.reflect)
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
   }, [])
 
   // The screen follows the session; these let the user steer it too.
@@ -95,10 +122,11 @@ export default function App() {
     (s: Surface) => {
       setSheet(null)
       setMenu(false)
+      closeReflect()
       setState((st) => ({ ...st, surface: s }))
       api.setSurface(s).catch((e) => toast('Couldn’t open that', (e as Error).message))
     },
-    [toast],
+    [toast, closeReflect],
   )
   const openReport = useCallback((id: string) => show({ kind: 'report', id }), [show])
   const openRef = useCallback(
@@ -107,9 +135,10 @@ export default function App() {
       else {
         setSheet(null)
         setMenu(false)
+        closeReflect()
       }
     },
-    [openReport],
+    [openReport, closeReflect],
   )
 
   useEffect(() => {
@@ -118,7 +147,7 @@ export default function App() {
     api.config().then(setConfig).catch(() => {})
     const q = new URLSearchParams(location.search).get('report')
     if (q) openReport(q)
-    if (location.search) history.replaceState(null, '', '/')
+    if (location.search || history.state?.reflect) history.replaceState(null, '', '/')
   }, [boot, load, openReport, toast])
 
   // Notification clicks (from the service worker) open what they're about.
@@ -195,6 +224,14 @@ export default function App() {
     load().catch(() => {})
   })
 
+  const { entries: exchange, clear } = useExchange(feed, state.status === 'idle', user?.id ?? 0, loaded)
+
+  // What the screen shows next to the exchange follows the session; it
+  // stays a moment after it closes, to animate out.
+  const showBrowser = state.surface.kind === 'browser' || state.control
+  const { shown: panelKey, leaving: panelLeaving } = useExit(showBrowser ? 'browser' : reportId ? `report:${reportId}` : null, 380)
+  const { shown: reflectShown, leaving: reflectLeaving } = useExit(reflect ? true : null, 300)
+
   // ---------- actions ----------
   const send = async (text: string, attachments: Attachment[], viaVoice: boolean) => {
     speaking.current = viaVoice
@@ -250,84 +287,100 @@ export default function App() {
   const unread = notes.filter((n) => !n.read).length
   const working = state.status === 'working'
   const needs = state.status === 'needs' ? state.needs : null
-  const placeholder = needs?.kind === 'question' ? 'Type your answer' : needs?.kind === 'takeover' ? 'Tell Alexa something, or take over' : working ? 'Add something or change course' : 'Ask Alexa to do anything'
+  const placeholder =
+    needs?.kind === 'question' ? 'Type your answer' : needs?.kind === 'takeover' ? 'Tell Alexa something, or take over' : needs?.kind === 'login' ? 'Or tell Alexa something instead' : working ? 'Add something or change course' : 'Ask Alexa to do anything'
 
   const takeOver = act(() => api.takeOver())
   const handBack = act(() => api.handBack())
   const stop = act(() => api.stop())
   const answer = (t: string) => send(t, [], false)
 
-  // What the screen shows next to the conversation follows the session.
-  const showBrowser = state.surface.kind === 'browser' || state.control
+  // The mark takes you home: the panel closes and, once Alexa is done, the
+  // exchange is put away (it's in Reflect).
+  const home = () => {
+    if (state.surface.kind) show({ kind: '' })
+    if (state.status === 'idle') clear()
+  }
+
   let panel: React.ReactNode = null
-  if (showBrowser)
+  if (panelKey === 'browser')
     panel = <BrowserPanel state={state} live={live} onTakeOver={takeOver} onHandBack={handBack} onClose={() => show({ kind: '' })} onUrl={(u) => setLive((l) => ({ ...l, url: u }))} />
-  else if (state.surface.kind === 'report')
-    panel = <ReportPanel key={reportId} report={(reportId && reports[reportId]) || null} onClose={() => show({ kind: '' })} />
+  else if (panelKey?.startsWith('report:')) {
+    const id = panelKey.slice(7)
+    panel = <ReportPanel key={id} report={reports[id] || null} onClose={() => show({ kind: '' })} />
+  }
 
   // The last thing Alexa said since the user last spoke, for small screens.
   let latest: Entry | null = null
-  for (let i = feed.length - 1; i >= 0; i--) {
-    const k = feed[i].kind
+  for (let i = exchange.length - 1; i >= 0; i--) {
+    const k = exchange[i].kind
     if (k === 'user') break
     if (k === 'say' || k === 'error') {
-      latest = feed[i]
+      latest = exchange[i]
       break
     }
   }
 
   return (
-    <div className="app">
+    <div className={`app${voice ? ' voice' : ''}`}>
       <header className="header">
-        <button type="button" className="mark-btn" aria-label="Show the conversation" onClick={() => state.surface.kind && show({ kind: '' })}>
+        <button type="button" className="mark-btn" aria-label="Home" title="Home" onClick={home}>
           <span className={`mark${working ? ' busy' : ''}`} />
         </button>
-        <button type="button" className="avatar-btn" aria-label="Account menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>
-          <span className="avatar">{(user.displayName || user.username).slice(0, 1).toUpperCase()}</span>
-          {(unread > 0 || needs) && <span className="badge" />}
-        </button>
+        <div className="end">
+          <button type="button" className="icon-btn" aria-label="Reflect" title="Reflect" onClick={() => openReflect()}>
+            <History size={20} />
+          </button>
+          <button type="button" className="avatar-btn" aria-label="Account menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>
+            <span className="avatar">{(user.displayName || user.username).slice(0, 1).toUpperCase()}</span>
+            {(unread > 0 || needs) && <span className="badge" />}
+          </button>
+        </div>
       </header>
 
-      {!voice && (
-        <main className={`stage${panel ? ' with-panel' : ''}`}>
-          {panel && (
-            <div className="panel-col">
-              {panel}
-              <Caption state={state} latest={latest} onAnswer={answer} onTakeOver={takeOver} onHandBack={handBack} onStop={stop} />
-            </div>
-          )}
-          <Log
-            feed={feed}
-            state={state}
-            hasMore={hasMore}
-            greeting={greeting(user.displayName)}
-            onMore={loadMore}
-            onAnswer={answer}
-            onTakeOver={takeOver}
-            onHandBack={handBack}
-            onStop={stop}
-            onOpenReport={openReport}
-            onShowBrowser={working && !showBrowser && state.browserUrl ? () => show({ kind: 'browser' }) : undefined}
-          />
-        </main>
-      )}
+      <main className={`stage${panel ? ' with-panel' : ''}${panelLeaving ? ' closing' : ''}`}>
+        {panel && (
+          <div className="panel-col">
+            {panel}
+            <Caption state={state} latest={latest} onAnswer={answer} onTakeOver={takeOver} onHandBack={handBack} onStop={stop} />
+          </div>
+        )}
+        <Log
+          mode="now"
+          entries={exchange}
+          state={state}
+          greeting={greeting(user.displayName)}
+          onAnswer={answer}
+          onTakeOver={takeOver}
+          onHandBack={handBack}
+          onStop={stop}
+          onOpenReport={openReport}
+          onShowBrowser={working && !showBrowser && state.browserUrl ? () => show({ kind: 'browser' }) : undefined}
+        />
+      </main>
 
       {voice && (
-        <div className="listening" aria-live="polite">
-          <p>
-            {heard.committed || heard.partial ? (
-              <>
-                {heard.committed} <span className="saying">{heard.partial}</span>
-              </>
-            ) : (
-              'Listening…'
-            )}
+        <div className="voice-tray" aria-live="polite">
+          <p className={`heard${heard.committed || heard.partial ? '' : ' quiet'}`}>
+            <span>
+              {heard.committed || heard.partial ? (
+                <>
+                  {heard.committed} <span className="saying">{heard.partial}</span>
+                </>
+              ) : (
+                'Listening…'
+              )}
+            </span>
           </p>
-          <p className="hint">{working ? 'Add something or change course. Tap to send.' : 'Say what you need. Tap the circle when you’re done.'}</p>
+          <p className="hint">{working ? 'Add something or change course. Tap the circle to send.' : 'Say what you need. Tap the circle when you’re done.'}</p>
         </div>
       )}
 
       <Composer placeholder={placeholder} voice={voice} onVoice={setVoice} onSend={send} onListen={(c, p) => setHeard({ committed: c, partial: p })} onError={(m) => toast('Voice', m)} />
+
+      {reflectShown && (
+        <Reflect tab={reflectTab} onTab={setReflectTab} leaving={reflectLeaving} feed={feed} hasMore={hasMore} state={state} onMore={loadMore} onOpenReport={openReport} onClose={closeReflect} />
+      )}
 
       {menu && (
         <AccountMenu
@@ -339,6 +392,7 @@ export default function App() {
             setSheet(s)
             if (s === 'notifications') api.notifications().then(setNotes)
           }}
+          onReflect={() => openReflect()}
           onBrowser={() => show({ kind: 'browser' })}
           onSignOut={async () => {
             await api.logout().catch(() => {})
@@ -346,10 +400,9 @@ export default function App() {
           }}
         />
       )}
-      {sheet === 'reports' && <ReportsSheet onOpenReport={openReport} onClose={() => setSheet(null)} />}
       {sheet === 'schedules' && <SchedulesSheet onClose={() => setSheet(null)} />}
       {sheet === 'memory' && <MemorySheet onClose={() => setSheet(null)} />}
-      {sheet === 'files' && <FilesSheet onClose={() => setSheet(null)} />}
+      {sheet === 'logins' && <LoginsSheet onClose={() => setSheet(null)} />}
       {sheet === 'notifications' && (
         <NotificationsSheet
           items={notes}

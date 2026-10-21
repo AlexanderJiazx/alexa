@@ -40,6 +40,9 @@ export const Bell = (p: P) => <S {...p}><path d="M6 10a6 6 0 0 1 12 0c0 5 2 6.5 
 export const Trash = (p: P) => <S {...p}><path d="M4.5 7h15M10 11v6M14 11v6M6 7l1 12.5h10L18 7M9 7V4.5h6V7" /></S>
 export const Play = (p: P) => <S {...p}><path d="M8 5.5v13l10-6.5z" /></S>
 export const Alert = (p: P) => <S {...p}><path d="M12 8.5v4.5M12 16.5h.01" /><circle cx="12" cy="12" r="8.5" /></S>
+export const History = (p: P) => <S {...p}><path d="M4.6 13.5A7.5 7.5 0 1 0 6.3 7" /><path d="M5.5 3.5v4h4" /><path d="M12 8.5V12l2.5 1.5" /></S>
+export const KeyIcon = (p: P) => <S {...p}><circle cx="8" cy="15.5" r="4" /><path d="M10.9 12.6L19.5 4M16 7.5l2.5 2.5M13.5 10l2 2" /></S>
+export const Shield = (p: P) => <S {...p}><path d="M12 3.5l7 2.6v5.4c0 4.3-2.9 7.6-7 9-4.1-1.4-7-4.7-7-9V6.1z" /><path d="M9 12l2.2 2.2L15.5 10" /></S>
 
 export function CursorArrow() {
   return (

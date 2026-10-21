@@ -25,6 +25,7 @@ import (
 	"alexagent/internal/notify"
 	"alexagent/internal/store"
 	"alexagent/internal/userenv"
+	"alexagent/internal/vault"
 )
 
 var (
@@ -43,6 +44,7 @@ type Runtime struct {
 	envs     *userenv.Envs
 	hub      *hub.Hub
 	notifier *notify.Notifier
+	vault    *vault.Vault
 	sched    *Scheduler
 
 	tools    []*tool
@@ -90,8 +92,8 @@ func userLoc(u *store.User) *time.Location {
 	return time.UTC
 }
 
-func New(ctx context.Context, cfg *config.Config, st *store.Store, client *llm.Client, br *browser.Manager, envs *userenv.Envs, h *hub.Hub, n *notify.Notifier) *Runtime {
-	rt := &Runtime{cfg: cfg, st: st, llm: client, browsers: br, envs: envs, hub: h, notifier: n,
+func New(ctx context.Context, cfg *config.Config, st *store.Store, client *llm.Client, br *browser.Manager, envs *userenv.Envs, h *hub.Hub, n *notify.Notifier, v *vault.Vault) *Runtime {
+	rt := &Runtime{cfg: cfg, st: st, llm: client, browsers: br, envs: envs, hub: h, notifier: n, vault: v,
 		baseCtx: ctx, runs: map[int64]*run{}, control: map[int64]bool{}, locks: map[int64]*sync.Mutex{}, mems: map[int64][]*store.Memory{}}
 	rt.tools = rt.buildTools()
 	rt.toolMap = map[string]*tool{}
@@ -187,8 +189,9 @@ func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
 	}
 	kind, notes := "user", []string{}
 	e := &store.Entry{UserID: u.ID, Kind: "user", Text: text}
+	data := map[string]any{}
 	if len(m.Attach) > 0 || m.Voice {
-		e.Data = marshal(map[string]any{"attachments": m.Attach, "voice": m.Voice})
+		data["attachments"], data["voice"] = m.Attach, m.Voice
 	}
 	if m.Voice {
 		notes = append(notes, "spoken")
@@ -196,17 +199,32 @@ func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
 	if m.Source == "schedule" {
 		kind = "schedule"
 		e.Kind, e.Text = "note", "Scheduled: "+m.Label
+		data["scheduled"] = true
 		notes = append(notes, "scheduled job “"+m.Label+"”, not typed by the user")
-	}
-	if err := rt.addEntry(ctx, e); err != nil {
-		return err
 	}
 	loc := userLoc(u)
 
 	l := rt.userLock(u.ID)
 	l.Lock()
 	defer l.Unlock()
-	if r := rt.running(u.ID); r != nil {
+	r := rt.running(u.ID)
+	var nd *Needs
+	if r == nil {
+		nd = rt.pendingNeeds(ctx, u.ID)
+	}
+	// A message that sets Alexa to work while it's idle starts a new
+	// exchange. The app shows the current exchange and leaves the earlier
+	// ones to Reflect.
+	if r == nil && nd == nil {
+		data["start"] = true
+	}
+	if len(data) > 0 {
+		e.Data = marshal(data)
+	}
+	if err := rt.addEntry(ctx, e); err != nil {
+		return err
+	}
+	if r != nil {
 		note := strings.Join(append(notes, "sent while you were working"), ", ")
 		if err := rt.st.AddInbox(ctx, u.ID, store.InboxMessage{Kind: kind, Text: stamp(loc, note, text), Attachments: marshal(m.Attach)}); err != nil {
 			return err
@@ -218,10 +236,13 @@ func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
 		return nil
 	}
 	note := strings.Join(notes, ", ")
-	if nd := rt.pendingNeeds(ctx, u.ID); nd != nil {
+	if nd != nil {
 		answer := "The user replied: " + text
-		if nd.Kind == "takeover" {
+		switch nd.Kind {
+		case "takeover":
 			answer = "The user didn't take over the browser and replied instead: " + text
+		case "login":
+			answer = "The user didn't enter their login and replied instead: " + text
 		}
 		if err := rt.resolveNeeds(ctx, u.ID, nd, stamp(loc, note, answer), nil); err != nil {
 			return err
@@ -289,8 +310,11 @@ func (rt *Runtime) HandBack(ctx context.Context, u *store.User, note string) err
 	}
 	if nd := rt.pendingNeeds(ctx, u.ID); nd != nil {
 		answer := "The user took over the browser and has handed control back."
-		if nd.Kind == "question" {
+		switch nd.Kind {
+		case "question":
 			answer = "The user took over the browser to handle this themselves and handed control back."
+		case "login":
+			answer = "Instead of entering their login in the form, the user took over the browser and has handed control back. Check whether they signed in."
 		}
 		answer += suffix
 		_ = rt.addEntry(ctx, &store.Entry{UserID: u.ID, Kind: "step", Text: "You took over", Status: "done"})

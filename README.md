@@ -11,12 +11,14 @@ There are no chats or tasks to manage. Each person has one conversation with Ale
 
 ## What it can do
 
-- **One conversation, forever.** When the prompt passes `COMPACT_TOKENS`, Alexa folds the older part into a structured summary and carries on. You can also do this on demand under *Settings → Conversation*. Lasting facts go to memory. Your feed keeps everything, so nothing disappears from view.
+- **One conversation, forever.** When the prompt passes `COMPACT_TOKENS`, Alexa folds the older part into a structured summary and carries on. You can also do this on demand under *Settings → Conversation*. Lasting facts go to memory. Your feed keeps everything, so nothing is lost.
+- **The screen shows what's happening now.** The main screen holds only the current exchange: the request that set Alexa to work and everything since. A new request clears it, and a finished exchange you've seen is put away when you come back more than 30 minutes later (or tap the dot, top left). *Reflect* (the clock icon) is where the past lives: the whole conversation, every report and your files.
 - **Speaks only when it has something to say.** The model's own text and reasoning stay hidden. Alexa talks to you through a `say` tool, in one or two short sentences (it's told to stay under 300 characters, and anything over 400 is refused). Questions come through `ask`, with quick-reply buttons.
-- **Longer answers become reports.** Research, comparisons, itineraries and plans open on screen as a document. A report is markdown, or a sandboxed interactive HTML page for charts and the like. It comes with a download button and *Add to calendar* (.ics) when it has events. Every report is kept under *Reports*.
-- **The screen follows the agent.** While Alexa works in its browser, the live browser appears by itself. A new report opens by itself. If you choose what to look at during a request, it stops switching your screen until your next message. What's on screen is stored on the server, so every device you have open shows the same thing, and it's still there after a reload.
+- **Longer answers become reports.** Research, comparisons, itineraries and plans open on screen as a document. A report is markdown, or a sandboxed interactive HTML page for charts and the like. It comes with a download button and *Add to calendar* (.ics) when it has events. Every report is kept in *Reflect*.
+- **The screen follows the agent.** While Alexa works in its browser, the live browser slides in beside the conversation, and Alexa's pointer glides to whatever it clicks before the page reacts. A new report opens by itself. If you choose what to look at during a request, it stops switching your screen until your next message. What's on screen is stored on the server, so every device you have open shows the same thing, and it's still there after a reload.
 - **Multi-step tasks in a real browser.** The agent sees each page as a numbered list of interactive elements plus an annotated screenshot, including what's inside embedded frames (same-site and cross-site, such as booking widgets and consent banners). It clicks, types, hovers, drags, scrolls, selects, uploads, follows popups and handles downloads. Date, time and slider fields get their values set directly. A page's confirm or prompt dialog waits for the agent to answer it instead of being clicked through.
-- **Take over.** Press *Take over* to drive the same browser yourself (mouse, keyboard, URL bar), for example to sign in, then *Hand back*. Alexa asks for this whenever it hits a password, 2FA or CAPTCHA.
+- **Take over.** Press *Take over* to drive the same browser yourself, then *Hand back*: click and scroll in it, type on your keyboard as you would on the page (on a phone, tap the keyboard button), or use the URL bar. Alexa asks for this when it hits a 2FA code, a CAPTCHA or payment details.
+- **Signs in for you.** When a site asks Alexa to sign in, including when a session has expired, it signs in with your saved login for that site. If there isn't one, it asks you on screen with a secure form: you type your username and password there and can save them for next time. Alexa's model never sees a password. Passwords are encrypted (AES-256-GCM) with a key kept outside the database, are never sent back to the app, and are only typed into a password field on a page of the site they belong to, over HTTPS; if a page later reveals one, it stays hidden from the model. You can add, change and delete logins under *Logins*.
 - **Asks before acting.** It confirms before purchases, sending messages or other consequential steps.
 - **Talk while it works.** Messages you send mid-job are picked up at its next step. A message also cuts short any wait in progress.
 - **Web search** with sources, plus `fetch_url` for quick reads.
@@ -25,7 +27,8 @@ There are no chats or tasks to manage. Each person has one conversation with Ale
 - **Schedules.** Say "every weekday at 7:30, …" or "tomorrow at 9, …", or add one under *Scheduled*. A scheduled job arrives in the same conversation as a message from the scheduler.
 - **Notifications:** Web Push (installable PWA) and, optionally, email via Resend. They are sent only when you don't have Alexa open on screen.
 - **Multiple users.** Each person gets their own conversation, memory, files, reports, schedules and Chrome profile, so cookies and logins stay separate. In the container, each user's Chrome and shell also run under their own Linux UID, so users can't read each other's files or the database.
-- **Voice mode.** Tap the bars, speak, and it sends when you stop talking. When you asked by voice, it reads its reply back.
+- **Voice mode.** Tap the bars, speak, and it sends when you stop talking. What you say shows at the bottom of the screen, so the conversation and the browser stay in view. When you asked by voice, it reads its reply back.
+- **Light and dark.** The app follows your device's appearance; you can pin light or dark under *Settings → Appearance*.
 - **Survives restarts.** Work that was in progress when the server stopped picks up again when it starts.
 
 ## Run it on a Raspberry Pi (Docker)
@@ -40,7 +43,7 @@ docker compose up -d --build  # builds natively for arm64; the first build takes
 
 Open `http://<pi>:8080`. The first account you create becomes the admin, and the admin adds everyone else (*Users* in the account menu). Set `ALLOW_SIGNUP=true` to let people sign themselves up.
 
-All state lives in `./data`: the SQLite DB (`alexa.db`; a `paper.db` from before the rename is picked up automatically), plus each user's workspace, browser profile and screenshots. Back up that folder to back everything up.
+All state lives in `./data`: the SQLite DB (`alexa.db`; a `paper.db` from before the rename is picked up automatically), the key saved logins are encrypted with (`vault.key`, made on first start), plus each user's workspace, browser profile and screenshots. Back up that folder to back everything up. Without `vault.key` the saved passwords can't be read, so keep it safe; to keep it apart from the database, set `VAULT_KEY_FILE` to a file elsewhere (a Docker secret, for example).
 
 ### HTTPS, push notifications and the microphone
 
@@ -69,7 +72,7 @@ Command-line helpers:
 python3 scripts/alexactl.py send "What's on the front page of Hacker News?"
 ```
 
-`alexactl.py` is a small API client used for end-to-end tests. It signs in with `ALEXA_URL`, `ALEXA_USER` and `ALEXA_PASSWORD` (or `--url`, `--user` and `--password`). `send` follows Alexa's reply as it comes in, printing its steps, messages and reports. It takes `--attach file`, `--answer text` (to reply to its first question) and `--handback`. The other commands are `feed`, `report ID`, `stop`, `compact`, `memories` and `schedules`.
+`alexactl.py` is a small API client used for end-to-end tests. It signs in with `ALEXA_URL`, `ALEXA_USER` and `ALEXA_PASSWORD` (or `--url`, `--user` and `--password`). `send` follows Alexa's reply as it comes in, printing its steps, messages and reports. It takes `--attach file`, `--answer text` (to reply to its first question), `--handback` and `--login user:password` (to answer its first sign-in request; the login is saved). The other commands are `feed`, `report ID`, `stop`, `compact`, `memories`, `schedules` and `logins`.
 
 ## Configuration
 
@@ -83,6 +86,7 @@ Set these as environment variables (see `.env.example`):
 | `COMPACT_TOKENS` | `120000` | Prompt size at which older conversation is folded into the summary |
 | `ADDR` | `:8080` | Listen address |
 | `DATA_DIR` | `./data` | State directory |
+| `VAULT_KEY_FILE` | `DATA_DIR/vault.key` | Key for saved logins (32 bytes, base64); made if missing |
 | `PUBLIC_URL` | | Used in notification links |
 | `ALLOW_SIGNUP` | `false` | Open sign-up after the first (admin) user |
 | `SECURE_COOKIES` | `false` | Set when serving over HTTPS |
@@ -118,7 +122,8 @@ internal/browser     per-user Chrome (chromedp): DOM indexing, annotated screens
                      actions, popups, screencast, human input for take-over
 internal/voice       realtime ASR WebSocket proxy + batch transcription
 internal/api         HTTP/WebSocket API, auth (bcrypt, cookie sessions, CSRF header),
-                     live view, reports, ICS export, uploads/files
+                     live view, reports, ICS export, uploads/files, saved logins
+internal/vault       saved logins: encryption, matching a page to its site
 internal/hub         per-user event fan-out to open clients, and whether one is on screen
 internal/store       SQLite (modernc, pure Go, WAL)
 internal/notify      Web Push (VAPID) + email
@@ -134,9 +139,9 @@ web/                 React UI (embedded into the binary at build time)
 - the reports.
 
 1. A message starts a run. The loop streams a model turn, executes its tool calls and repeats until the model stops calling tools. Each tool call shows as a step with a short status label.
-2. Only `say`, `ask` and `present_report` reach the user. If a run ends with your message unanswered, Alexa gets one reminder to use `say`. After that, its last text is clipped and used as the reply.
+2. Only `say`, `ask` and `present_report` reach the user, plus `request_takeover` and `request_login` when Alexa needs them in the browser. If a run ends with your message unanswered, Alexa gets one reminder to use `say`. After that, its last text is clipped and used as the reply.
 3. Messages that arrive mid-run are added before the next turn, each stamped with its local time.
-4. The run suspends on a question or a take-over. Your reply or hand-back resumes it.
+4. The run suspends on a question, a take-over or a sign-in request. Your reply, hand-back or login resumes it.
 5. To stay within budget:
    - Old screenshots and page dumps are pruned from the replay.
    - Past `COMPACT_TOKENS`, the older part of the conversation is folded into the summary. Compaction also runs when the API reports a context overflow.
@@ -148,7 +153,7 @@ web/                 React UI (embedded into the binary at build time)
 ## Tests
 
 ```bash
-go test ./...            # store, API (session, compaction, auth/CSRF/isolation), browser (needs Chrome), agent
+go test ./...            # store, vault, API (session, compaction, auth/CSRF/isolation, sign-in), browser (needs Chrome), agent
 cd web && npm run build  # type-check + build
 ```
 
@@ -160,4 +165,5 @@ The API tests drive the whole session loop against a scripted fake model. They c
 - messages sent mid-run;
 - compaction;
 - the memory snapshot;
+- signing in: the secure form, saved logins and a login typed into a real page, with the password never reaching the model, the feed or the API;
 - isolation between users.

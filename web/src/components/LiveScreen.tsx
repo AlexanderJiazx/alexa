@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { wsURL } from '../lib/api'
-import { Back, CursorArrow, Fwd, Lock, Reload } from './Icons'
+import { Back, CursorArrow, Fwd, Keyboard, Lock, Reload } from './Icons'
 
 export type Cursor = { x: number; y: number; click: boolean; seq: number }
 
@@ -11,20 +11,50 @@ type Props = {
   onUrl: (url: string, title?: string) => void
 }
 
+type Point = { x: number; y: number }
+
+// glide is how long the pointer takes to travel dist pixels of the page; the
+// server waits as long before acting, so the page reacts as it arrives.
+export function glide(dist: number) {
+  return dist < 1 ? 0 : Math.min(220 + 0.3 * dist, 700)
+}
+
+// A reach: slow start, quick middle, gentle landing (minimum jerk).
+const reach = (t: number) => t * t * t * (10 - 15 * t + 6 * t * t)
+
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)')
+
+// What stays in the keyboard field, so a backspace always has something to
+// delete (soft keyboards send nothing for one in an empty field).
+const pad = '  '
+
+const viaInput = (e: React.KeyboardEvent) => e.nativeEvent.isComposing || e.keyCode === 229 || ['Unidentified', 'Process', 'Dead'].includes(e.key)
+
 // LiveScreen streams the session's shared browser as JPEG frames and, when
-// the user is in control, forwards mouse and keyboard input to it.
+// the user is in control, forwards their mouse and keyboard to it.
 export function LiveScreen({ control, cursor, url, onUrl }: Props) {
   const [src, setSrc] = useState<string | null>(null)
   const [size, setSize] = useState({ w: 1280, h: 800 })
   const [connected, setConnected] = useState(false)
   const [editUrl, setEditUrl] = useState<string | null>(null)
-  const [typeText, setTypeText] = useState('')
+  const [typing, setTyping] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
+  const keysRef = useRef<HTMLTextAreaElement>(null)
+  const pointerRef = useRef<HTMLSpanElement>(null)
   const lastMove = useRef(0)
-  const touch = useRef<{ x: number; y: number; moved: boolean } | null>(null)
+  const touch = useRef<{ x: number; y: number; moved: boolean; typing: boolean } | null>(null)
   const onUrlRef = useRef(onUrl)
   onUrlRef.current = onUrl
+  // Where Alexa's pointer is drawn, in page pixels, and the glide under way.
+  const at = useRef<Point | null>(null)
+  const start = useRef<Point | null>(null)
+  const frame = useRef(0)
+  const seen = useRef(0)
+  // What the keyboard field held after the last change was sent.
+  const sent = useRef(pad)
+  const composing = useRef(false)
+  const coarse = useRef(matchMedia('(pointer: coarse)').matches)
 
   useEffect(() => {
     let stopped = false
@@ -46,6 +76,7 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
             if (m.type === 'hello') {
               setSize({ w: m.width, h: m.height })
               if (m.url) onUrlRef.current(m.url, m.title)
+              if (m.cursor) start.current = { x: m.cursor.x, y: m.cursor.y }
             }
           } catch {
             /* ignore */
@@ -73,8 +104,69 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
     }
   }, [])
 
+  // Alexa's pointer glides to where it acts, along a slight curve, and
+  // clicks when it gets there.
+  const place = (p: Point) => {
+    at.current = p
+    const el = pointerRef.current
+    if (!el) return
+    el.style.left = `${(p.x / size.w) * 100}%`
+    el.style.top = `${(p.y / size.h) * 100}%`
+  }
   useEffect(() => {
-    if (control) boxRef.current?.focus()
+    const el = pointerRef.current
+    if (!cursor || control || !el) return
+    const from = at.current ?? start.current ?? { x: size.w / 2, y: size.h / 2 }
+    const to = { x: cursor.x, y: cursor.y }
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    const dist = Math.hypot(dx, dy)
+    const ms = reduceMotion.matches ? 0 : glide(dist)
+    // Bend the path a little to one side, as a hand would.
+    const bend = Math.min(dist * 0.16, 56) * (cursor.seq % 2 ? 1 : -1)
+    const c = { x: from.x + dx / 2 - (dy / (dist || 1)) * bend, y: from.y + dy / 2 + (dx / (dist || 1)) * bend }
+    // Back from a take-over, the pointer reappears where it was.
+    const fresh = cursor.seq !== seen.current
+    seen.current = cursor.seq
+    const click = () => {
+      if (!cursor.click || !fresh) return
+      el.classList.remove('click')
+      void el.offsetWidth // restart the animation
+      el.classList.add('click')
+    }
+    cancelAnimationFrame(frame.current)
+    if (!ms) {
+      place(to)
+      click()
+      return
+    }
+    const t0 = performance.now()
+    const step = (now: number) => {
+      const t = Math.min(1, (now - t0) / ms)
+      const e = reach(t)
+      const u = 1 - e
+      place({ x: u * u * from.x + 2 * u * e * c.x + e * e * to.x, y: u * u * from.y + 2 * u * e * c.y + e * e * to.y })
+      if (t < 1) frame.current = requestAnimationFrame(step)
+      else click()
+    }
+    frame.current = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(frame.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cursor?.seq, control])
+
+  // The pointer keeps its place when the frame size arrives or changes.
+  useEffect(() => {
+    if (at.current) place(at.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.w, size.h])
+
+  useEffect(() => {
+    const k = keysRef.current
+    if (control && k && !coarse.current) k.focus({ preventScroll: true })
+    if (!control) {
+      k?.blur()
+      setTyping(false)
+    }
   }, [control])
 
   const send = (ev: Record<string, unknown>) => {
@@ -94,13 +186,75 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
 
   const btn = (b: number) => (b === 2 ? 'right' : b === 1 ? 'middle' : 'left')
 
+  const press = (key: string, code: string, keyCode: number, text = '') => {
+    send({ kind: 'keydown', key, code, keyCode, text })
+    send({ kind: 'keyup', key, code, keyCode })
+  }
+
+  // type sends text, turning line breaks into Enter.
+  const type = (text: string) => {
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (i > 0) press('Enter', 'Enter', 13, '\r')
+      if (line) send({ kind: 'text', text: line })
+    })
+  }
+
+  const resetKeys = () => {
+    const k = keysRef.current
+    if (!k) return
+    k.value = pad
+    k.setSelectionRange(pad.length, pad.length)
+    sent.current = pad
+  }
+
+  // What soft keyboards and input methods type arrives as changes to the
+  // keyboard field; each is sent on as backspaces and text.
+  const onInput = () => {
+    const k = keysRef.current
+    if (!k) return
+    const now = k.value
+    const before = sent.current
+    let same = 0
+    while (same < now.length && same < before.length && now[same] === before[same]) same++
+    for (let i = same; i < before.length; i++) press('Backspace', 'Backspace', 8)
+    if (now.length > same) type(now.slice(same).replace(/ /g, ' '))
+    sent.current = now
+    if (!composing.current) resetKeys()
+  }
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!control) return
+    // Input methods, accent keys and soft keyboards that don't say which key
+    // it was type through onInput.
+    if (viaInput(e)) return
+    // Let the browser handle paste so the text can be sent.
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') return
+    e.preventDefault()
+    const printable = e.key.length === 1 && !e.ctrlKey && !e.metaKey
+    send({ kind: 'keydown', key: e.key, code: e.code, keyCode: e.keyCode, text: printable ? e.key : e.key === 'Enter' ? '\r' : '', modifiers: mods(e) })
+  }
+  const onKeyUp = (e: React.KeyboardEvent) => {
+    if (!control || viaInput(e)) return
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') return
+    e.preventDefault()
+    send({ kind: 'keyup', key: e.key, code: e.code, keyCode: e.keyCode, modifiers: mods(e) })
+  }
+  const onPaste = (e: React.ClipboardEvent) => {
+    if (!control) return
+    e.preventDefault()
+    const t = e.clipboardData.getData('text')
+    if (t) type(t)
+  }
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (!control) return
-    boxRef.current?.focus()
     if (e.pointerType === 'touch') {
-      touch.current = { x: e.clientX, y: e.clientY, moved: false }
+      touch.current = { x: e.clientX, y: e.clientY, moved: false, typing: document.activeElement === keysRef.current }
       return
     }
+    // Keep the keyboard on the page; the field takes it back right away.
+    e.preventDefault()
+    keysRef.current?.focus({ preventScroll: true })
     const p = toPage(e.clientX, e.clientY)
     send({ kind: 'mousedown', ...p, button: btn(e.button), clicks: e.detail || 1, modifiers: mods(e) })
   }
@@ -108,11 +262,14 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
     if (!control) return
     const p = toPage(e.clientX, e.clientY)
     if (e.pointerType === 'touch') {
-      if (touch.current && !touch.current.moved) {
+      const tc = touch.current
+      touch.current = null
+      if (tc && !tc.moved) {
         send({ kind: 'mousedown', ...p, button: 'left', clicks: 1 })
         send({ kind: 'mouseup', ...p, button: 'left', clicks: 1 })
+        // Tapping the page keeps the on-screen keyboard up if it was.
+        if (tc.typing) keysRef.current?.focus({ preventScroll: true })
       }
-      touch.current = null
       return
     }
     send({ kind: 'mouseup', ...p, button: btn(e.button), clicks: e.detail || 1, modifiers: mods(e) })
@@ -142,22 +299,7 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
     if (!control) return
     send({ kind: 'wheel', ...toPage(e.clientX, e.clientY), dx: e.deltaX, dy: e.deltaY })
   }
-  const onKey = (e: React.KeyboardEvent, down: boolean) => {
-    if (!control) return
-    // Let the browser handle paste so we can forward the text.
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') return
-    e.preventDefault()
-    const printable = e.key.length === 1 && !e.ctrlKey && !e.metaKey
-    send({ kind: down ? 'keydown' : 'keyup', key: e.key, code: e.code, keyCode: e.keyCode, text: down && printable ? e.key : down && e.key === 'Enter' ? '\r' : '', modifiers: mods(e) })
-  }
-  const onPaste = (e: React.ClipboardEvent) => {
-    if (!control) return
-    e.preventDefault()
-    const t = e.clipboardData.getData('text')
-    if (t) send({ kind: 'text', text: t })
-  }
 
-  const scale = boxRef.current ? boxRef.current.getBoundingClientRect().width / size.w : 0
   const host = (() => {
     try {
       const u = new URL(url)
@@ -192,7 +334,7 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
                 e.preventDefault()
                 if (editUrl) send({ kind: 'navigate', url: editUrl })
                 setEditUrl(null)
-                boxRef.current?.focus()
+                if (!coarse.current) keysRef.current?.focus({ preventScroll: true })
               }}
             >
               <label htmlFor="live-url" className="sr">
@@ -204,69 +346,69 @@ export function LiveScreen({ control, cursor, url, onUrl }: Props) {
             <span>{host || 'about:blank'}</span>
           )}
         </div>
+        {control && coarse.current && (
+          // Phones and tablets show their keyboard only for a text field.
+          <button
+            type="button"
+            className="nav-btn"
+            aria-label="Keyboard"
+            aria-pressed={typing}
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={() => {
+              const k = keysRef.current
+              if (typing) k?.blur()
+              else k?.focus({ preventScroll: true })
+            }}
+          >
+            <Keyboard size={17} />
+          </button>
+        )}
       </div>
       <div
         ref={boxRef}
         className={`screen${control ? ' control' : ''}`}
         style={{ aspectRatio: `${size.w} / ${size.h}` }}
-        tabIndex={control ? 0 : -1}
-        aria-label={control ? 'Shared browser — you are in control' : 'Shared browser'}
+        aria-label={control ? 'Shared browser — you are in control; type to type into the page' : 'Shared browser'}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
         onPointerMove={onPointerMove}
         onWheel={onWheel}
-        onKeyDown={(e) => onKey(e, true)}
-        onKeyUp={(e) => onKey(e, false)}
-        onPaste={onPaste}
         onContextMenu={(e) => control && e.preventDefault()}
       >
         {src ? <img src={src} alt="" draggable={false} /> : <div className="empty">{connected ? 'Opening the browser…' : 'Connecting to the browser…'}</div>}
-        {!control && cursor && scale > 0 && (
-          <span key={cursor.seq} className="cursor" style={{ left: cursor.x * scale, top: cursor.y * scale }}>
-            {cursor.click && <span className="rip" />}
+        {control && (
+          <textarea
+            ref={keysRef}
+            className="keys"
+            aria-label="Type into the page"
+            defaultValue={pad}
+            autoCapitalize="none"
+            autoCorrect="off"
+            autoComplete="off"
+            spellCheck={false}
+            onFocus={() => {
+              resetKeys()
+              setTyping(true)
+            }}
+            onBlur={() => setTyping(false)}
+            onKeyDown={onKeyDown}
+            onKeyUp={onKeyUp}
+            onInput={onInput}
+            onCompositionStart={() => (composing.current = true)}
+            onCompositionEnd={() => {
+              composing.current = false
+              onInput()
+            }}
+            onPaste={onPaste}
+          />
+        )}
+        {!control && cursor && (
+          <span ref={pointerRef} className="cursor">
+            <span className="rip" />
             <CursorArrow />
           </span>
         )}
       </div>
-      {control && (
-        <form
-          className="urlbar"
-          style={{ borderTop: '1px solid var(--line)', borderBottom: 0, justifyContent: 'stretch', height: 44 }}
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (typeText) send({ kind: 'text', text: typeText })
-            send({ kind: 'keydown', key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' })
-            send({ kind: 'keyup', key: 'Enter', code: 'Enter', keyCode: 13 })
-            setTypeText('')
-          }}
-        >
-          <div className="urlbox" style={{ width: '100%', maxWidth: 'none' }}>
-            <label htmlFor="live-type" className="sr">
-              Type into the page
-            </label>
-            <input
-              id="live-type"
-              type="text"
-              placeholder="Type into the page (or click the page and use your keyboard)"
-              value={typeText}
-              onChange={(e) => setTypeText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Tab' && typeText) {
-                  e.preventDefault()
-                  send({ kind: 'text', text: typeText })
-                  setTypeText('')
-                }
-              }}
-              onBlur={() => {
-                if (typeText) {
-                  send({ kind: 'text', text: typeText })
-                  setTypeText('')
-                }
-              }}
-            />
-          </div>
-        </form>
-      )}
     </div>
   )
 }

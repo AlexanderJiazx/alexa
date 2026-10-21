@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,6 +50,7 @@ type Tab struct {
 	humanAt    time.Time     // last input from a person in control
 	elems      []elemRef     // where each element of the latest state lives
 	elemsPage  *pageCtx      // the page that state was read from
+	secrets    []string      // passwords typed in from the vault, kept from the model
 
 	actMu sync.Mutex // serializes actions
 	busyN atomic.Int32
@@ -62,6 +64,8 @@ Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
 
 func newTab(b *Browser, taskID string, ctx context.Context, cancel context.CancelFunc) (*Tab, error) {
 	t := &Tab{b: b, taskID: taskID, ctx: ctx, subs: map[chan []byte]struct{}{}}
+	// The pointer shown in the live view starts in the middle.
+	t.cursorX, t.cursorY = float64(b.mgr.opts.Width)/2, float64(b.mgr.opts.Height)/2
 	p := &pageCtx{ctx: ctx, cancel: cancel}
 	if err := t.setupPage(p); err != nil {
 		return nil, err
@@ -397,11 +401,29 @@ func (t *Tab) settle() {
 	time.Sleep(300 * time.Millisecond)
 }
 
-func (t *Tab) setCursor(x, y float64, click bool) {
+// glide is how long the pointer in the live view takes to travel dist
+// pixels; the app animates it over the same time.
+func glide(dist float64) time.Duration {
+	if dist < 1 {
+		return 0
+	}
+	return time.Duration(min(220+0.3*dist, 700) * float64(time.Millisecond))
+}
+
+// setCursor moves the agent's pointer in the live view to x, y, with a
+// click there when click is set. With wait, and someone watching, it
+// returns once the pointer gets there, so the page reacts after the pointer
+// arrives rather than before.
+func (t *Tab) setCursor(x, y float64, click, wait bool) {
 	t.mu.Lock()
+	dist := math.Hypot(x-t.cursorX, y-t.cursorY)
 	t.cursorX, t.cursorY = x, y
+	watched := len(t.subs) > 0
 	t.mu.Unlock()
 	t.b.emit(t.taskID, TabEvent{Type: "cursor", X: x, Y: y, Click: click})
+	if wait && watched {
+		time.Sleep(glide(dist))
+	}
 }
 
 func (t *Tab) mouseClick(x, y float64, button input.MouseButton, count int64) error {

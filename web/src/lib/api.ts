@@ -11,7 +11,7 @@ export type User = {
 
 export type Attachment = { name: string; path: string; mime: string; size: number }
 
-export type Needs = { kind: 'takeover' | 'question'; message: string; options?: string[]; entryId?: number }
+export type Needs = { kind: 'takeover' | 'question' | 'login'; message: string; options?: string[]; site?: string; username?: string; entryId?: number }
 export type Surface = { kind: '' | 'browser' | 'report'; id?: string }
 
 // The session: Alexa's one never-ending conversation with this user.
@@ -29,11 +29,23 @@ export type SessionState = {
 // Entry is one item of the conversation as the user sees it.
 export type Entry = {
   id: number
-  kind: 'user' | 'say' | 'ask' | 'takeover' | 'report' | 'step' | 'error' | 'note'
+  kind: 'user' | 'say' | 'ask' | 'takeover' | 'login' | 'report' | 'step' | 'error' | 'note'
   text: string
   doneText?: string
   status?: string
-  data?: { attachments?: Attachment[]; voice?: boolean; options?: string[]; id?: string; updated?: boolean }
+  data?: {
+    attachments?: Attachment[]
+    voice?: boolean
+    options?: string[]
+    id?: string
+    updated?: boolean
+    // start marks the message that set Alexa to work while it was idle: the
+    // first entry of an exchange.
+    start?: boolean
+    scheduled?: boolean
+    site?: string
+    username?: string
+  }
   createdAt: number
   updatedAt: number
 }
@@ -67,6 +79,8 @@ export type Schedule = {
   createdAt: number
 }
 export type Notification = { id: number; ref?: string; title: string; body: string; read: boolean; createdAt: number }
+// A saved login. Its password stays on the server.
+export type Login = { id: number; site: string; username: string; createdAt: number; updatedAt: number; usedAt?: number }
 export type FileInfo = { path: string; size: number; modTime: number; isDir: boolean }
 export type ServerConfig = {
   model: string
@@ -123,6 +137,7 @@ export const api = {
   feed: (before: number) => request<{ feed: Entry[]; hasMore: boolean }>('GET', `/api/feed?before=${before}`),
   send: (text: string, attachments: Attachment[], voice: boolean) => request('POST', '/api/messages', { text, attachments, voice }),
   takeOver: () => request('POST', '/api/takeover'),
+  signIn: (username: string, password: string, save: boolean) => request('POST', '/api/signin', { username, password, save }),
   handBack: (note = '') => request('POST', '/api/handback', { note }),
   stop: () => request('POST', '/api/stop'),
   setSurface: (s: Surface) => request('PUT', '/api/surface', s),
@@ -154,6 +169,11 @@ export const api = {
   setScheduleEnabled: (id: string, enabled: boolean) => request('PATCH', `/api/schedules/${id}`, { enabled }),
   deleteSchedule: (id: string) => request('DELETE', `/api/schedules/${id}`),
   runSchedule: (id: string) => request('POST', `/api/schedules/${id}/run`),
+
+  logins: () => request<Login[]>('GET', '/api/logins'),
+  addLogin: (b: { site: string; username: string; password: string }) => request<Login>('POST', '/api/logins', b),
+  updateLogin: (id: number, b: { username?: string; password?: string }) => request<Login>('PUT', `/api/logins/${id}`, b),
+  deleteLogin: (id: number) => request('DELETE', `/api/logins/${id}`),
 
   notifications: () => request<Notification[]>('GET', '/api/notifications'),
   markRead: () => request('POST', '/api/notifications/read'),
@@ -209,6 +229,17 @@ export function day(ts: number) {
   if (d.toDateString() === today.toDateString()) return 'Today'
   if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: d.getFullYear() === today.getFullYear() ? undefined : 'numeric' })
+}
+
+// siteAddress turns what someone typed for a site into the form browsers
+// use, with internationalised names in ASCII (punycode).
+export function siteAddress(s: string) {
+  const t = s.trim()
+  try {
+    return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `https://${t}`).hostname || t
+  } catch {
+    return t
+  }
 }
 
 export function hostOf(u: string) {

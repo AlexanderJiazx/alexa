@@ -28,6 +28,7 @@ import (
 	"alexagent/internal/notify"
 	"alexagent/internal/store"
 	"alexagent/internal/userenv"
+	"alexagent/internal/vault"
 	"alexagent/internal/voice"
 )
 
@@ -40,12 +41,13 @@ type Server struct {
 	notifier *notify.Notifier
 	voice    *voice.Service
 	browsers *browser.Manager
+	vault    *vault.Vault
 	static   fs.FS
 	lim      limiter
 }
 
-func New(cfg *config.Config, st *store.Store, rt *agent.Runtime, h *hub.Hub, envs *userenv.Envs, n *notify.Notifier, v *voice.Service, br *browser.Manager, static fs.FS) *Server {
-	return &Server{cfg: cfg, st: st, rt: rt, hub: h, envs: envs, notifier: n, voice: v, browsers: br, static: static}
+func New(cfg *config.Config, st *store.Store, rt *agent.Runtime, h *hub.Hub, envs *userenv.Envs, n *notify.Notifier, v *voice.Service, br *browser.Manager, logins *vault.Vault, static fs.FS) *Server {
+	return &Server{cfg: cfg, st: st, rt: rt, hub: h, envs: envs, notifier: n, voice: v, browsers: br, vault: logins, static: static}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -75,6 +77,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/session/compact", s.auth(s.handleCompact))
 	mux.HandleFunc("POST /api/session/reset", s.auth(s.handleReset))
 	mux.HandleFunc("GET /api/live", s.auth(s.handleLive))
+	mux.HandleFunc("POST /api/signin", s.auth(s.handleSignIn))
+	// saved logins
+	mux.HandleFunc("GET /api/logins", s.auth(s.handleListLogins))
+	mux.HandleFunc("POST /api/logins", s.auth(s.handleAddLogin))
+	mux.HandleFunc("PUT /api/logins/{id}", s.auth(s.handleUpdateLogin))
+	mux.HandleFunc("DELETE /api/logins/{id}", s.auth(s.handleDeleteLogin))
 	// reports
 	mux.HandleFunc("GET /api/reports", s.auth(s.handleListReports))
 	mux.HandleFunc("GET /api/reports/{id}", s.auth(s.handleGetReport))
@@ -137,7 +145,7 @@ func sessionErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, agent.ErrNotFound):
 		writeErr(w, 404, "not found")
-	case errors.Is(err, agent.ErrBusy):
+	case errors.Is(err, agent.ErrBusy), errors.Is(err, agent.ErrNotWaiting):
 		writeErr(w, 409, err.Error())
 	default:
 		writeErr(w, 400, err.Error())

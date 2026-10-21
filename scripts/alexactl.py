@@ -2,8 +2,8 @@
 """Tiny CLI client for the Alexa API — used for end-to-end testing.
 
 Usage:
-  alexactl.py [--url URL] [--user U --password P] send "message" [--timeout S] [--answer TEXT] [--handback] [--attach FILE]
-  alexactl.py ... feed [-n N] | report ID | stop | compact | memories | schedules
+  alexactl.py [--url URL] [--user U --password P] send "message" [--timeout S] [--answer TEXT] [--handback] [--login USER:PASSWORD] [--attach FILE]
+  alexactl.py ... feed [-n N] | report ID | stop | compact | memories | schedules | logins
 """
 import argparse
 import http.cookiejar
@@ -95,7 +95,7 @@ def print_report(r):
     print(flush=True)
 
 
-def follow(c, after, timeout, answer=None, handback=False):
+def follow(c, after, timeout, answer=None, handback=False, login=None):
     """Prints new and changed entries until Alexa is done or needs the user."""
     printed = {}
     t0 = time.time() * 1000
@@ -123,6 +123,11 @@ def follow(c, after, timeout, answer=None, handback=False):
                 print(f"  answering: {answer}", flush=True)
                 c.req("POST", "/api/messages", {"text": answer})
                 answer = None
+            elif needs.get("kind") == "login" and login:
+                user, _, password = login.partition(":")
+                print(f"  signing in to {needs.get('site')} as {user}", flush=True)
+                c.req("POST", "/api/signin", {"username": user, "password": password, "save": True})
+                login = None
             else:
                 print(f"  >>> NEEDS ({needs.get('kind')}): {needs.get('message')}", flush=True)
                 return st
@@ -144,12 +149,13 @@ def main():
     sd.add_argument("--timeout", type=int, default=900)
     sd.add_argument("--answer", help="reply to Alexa's first question with this")
     sd.add_argument("--handback", action="store_true", help="hand the browser straight back if Alexa asks you to take over")
+    sd.add_argument("--login", help="answer Alexa's first sign-in request with this login, USER:PASSWORD (it's saved)")
     sd.add_argument("--attach", action="append", default=[], help="file to upload and attach (repeatable)")
     fd = sub.add_parser("feed")
     fd.add_argument("-n", type=int, default=30)
     rp = sub.add_parser("report")
     rp.add_argument("id")
-    for name in ("stop", "compact", "memories", "schedules"):
+    for name in ("stop", "compact", "memories", "schedules", "logins"):
         sub.add_parser(name)
     a = ap.parse_args()
     if not a.password:
@@ -160,7 +166,7 @@ def main():
         after = max((e["id"] for e in feed), default=0)
         atts = [c.upload(p) for p in a.attach]
         c.req("POST", "/api/messages", {"text": a.text, "attachments": atts})
-        st = follow(c, after, a.timeout, a.answer, a.handback)
+        st = follow(c, after, a.timeout, a.answer, a.handback, a.login)
         print(f"\nSTATUS: {st['status']}  context: {st['contextTokens']} tokens  compactions: {st['compactions']}")
     elif a.cmd == "feed":
         for e in c.req("GET", "/api/session")["feed"][-a.n:]:
@@ -177,6 +183,8 @@ def main():
         print(json.dumps(c.req("GET", "/api/memories"), indent=2))
     elif a.cmd == "schedules":
         print(json.dumps(c.req("GET", "/api/schedules"), indent=2))
+    elif a.cmd == "logins":
+        print(json.dumps(c.req("GET", "/api/logins"), indent=2))
 
 
 if __name__ == "__main__":

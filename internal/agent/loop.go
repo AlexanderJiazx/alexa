@@ -455,9 +455,15 @@ func (rt *Runtime) suspend(r *run, nd *Needs) bool {
 		e.Data = marshal(map[string]any{"options": nd.Options})
 	}
 	activity := "Waiting for your answer"
-	if nd.Kind == "takeover" {
+	switch nd.Kind {
+	case "takeover":
 		e.Kind = "takeover"
 		activity = nd.Message
+		_ = rt.st.SetSessionSurface(ctx, uid, marshal(Surface{Kind: "browser"}))
+	case "login":
+		e.Kind = "login"
+		e.Data = marshal(map[string]any{"site": nd.Site, "username": nd.Username})
+		activity = "Waiting for you to sign in to " + nd.Site
 		_ = rt.st.SetSessionSurface(ctx, uid, marshal(Surface{Kind: "browser"}))
 	}
 	_ = rt.addEntry(ctx, e)

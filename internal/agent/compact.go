@@ -245,6 +245,8 @@ func renderItem(si storedItem) string {
 			return fmt.Sprintf("ALEXA asked: %s %v", str(args, "question"), strList(args, "options"))
 		case "request_takeover":
 			return "ALEXA asked the user to take over the browser: " + str(args, "reason")
+		case "request_login":
+			return "ALEXA asked the user to sign in: " + str(args, "reason")
 		case "present_report":
 			return fmt.Sprintf("ALEXA showed a report %q:\n%s", str(args, "title"), trim(str(args, "content"), 3000))
 		case "memory_save":

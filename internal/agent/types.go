@@ -4,9 +4,11 @@ import "encoding/json"
 
 // Needs describes why the session is waiting on the user.
 type Needs struct {
-	Kind     string   `json:"kind"` // takeover | question
+	Kind     string   `json:"kind"` // takeover | question | login
 	Message  string   `json:"message"`
 	Options  []string `json:"options,omitempty"`
+	Site     string   `json:"site,omitempty"`     // login: the site to sign in to
+	Username string   `json:"username,omitempty"` // login: the account last used there
 	CallID   string   `json:"callId"`
 	ToolName string   `json:"toolName"`
 	EntryID  int64    `json:"entryId,omitempty"` // the feed entry that shows it

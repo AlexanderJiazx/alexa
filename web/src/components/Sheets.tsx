@@ -1,13 +1,14 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import type { FileInfo, Memory, Notification, Report, Schedule, ServerConfig, SessionState, User } from '../lib/api'
-import { ago, api, fmtSize } from '../lib/api'
-import { Bell, Brain, Clock, Close, Download, File, Folder, Gear, Globe, Out, People, Play, Trash } from './Icons'
+import type { Login, Memory, Notification, Schedule, ServerConfig, SessionState, User } from '../lib/api'
+import { ago, api, siteAddress } from '../lib/api'
+import { getTheme, setTheme, type Theme } from '../lib/theme'
+import { Bell, Brain, Clock, Close, Gear, Globe, History, KeyIcon, Out, People, Play, Trash } from './Icons'
 
-export type SheetName = 'reports' | 'schedules' | 'memory' | 'files' | 'notifications' | 'settings' | 'users'
+export type SheetName = 'schedules' | 'memory' | 'logins' | 'notifications' | 'settings' | 'users'
 
 // ---------- account menu ----------
 
-export function AccountMenu({ user, unread, onOpen, onBrowser, onSignOut, onClose }: { user: User; unread: number; onOpen: (s: SheetName) => void; onBrowser: () => void; onSignOut: () => void; onClose: () => void }) {
+export function AccountMenu({ user, unread, onOpen, onReflect, onBrowser, onSignOut, onClose }: { user: User; unread: number; onOpen: (s: SheetName) => void; onReflect: () => void; onBrowser: () => void; onSignOut: () => void; onClose: () => void }) {
   const item = (s: SheetName, icon: ReactNode, label: string, count?: number) => (
     <button type="button" role="menuitem" onClick={() => onOpen(s)}>
       {icon}
@@ -22,14 +23,17 @@ export function AccountMenu({ user, unread, onOpen, onBrowser, onSignOut, onClos
         <div className="who">
           <b>{user.displayName || user.username}</b>@{user.username}
         </div>
-        {item('reports', <File size={18} />, 'Reports')}
+        <button type="button" role="menuitem" onClick={onReflect}>
+          <History size={18} />
+          <span>Reflect</span>
+        </button>
         <button type="button" role="menuitem" onClick={onBrowser}>
           <Globe size={18} />
           <span>Browser</span>
         </button>
         {item('schedules', <Clock size={18} />, 'Scheduled')}
         {item('memory', <Brain size={18} />, 'Memory')}
-        {item('files', <Folder size={18} />, 'Files')}
+        {item('logins', <KeyIcon size={18} />, 'Logins')}
         {item('notifications', <Bell size={18} />, 'Notifications', unread)}
         {item('settings', <Gear size={18} />, 'Settings')}
         {user.isAdmin && item('users', <People size={18} />, 'Users')}
@@ -64,60 +68,6 @@ function Sheet({ title, onClose, children, actions }: { title: string; onClose: 
         <div className="sheet-body">{children}</div>
       </section>
     </>
-  )
-}
-
-// ---------- reports ----------
-
-export function ReportsSheet({ onOpenReport, onClose }: { onOpenReport: (id: string) => void; onClose: () => void }) {
-  const [list, setList] = useState<Report[] | null>(null)
-  const [err, setErr] = useState('')
-  const load = () => api.reports().then(setList).catch((e) => setErr(e.message))
-  useEffect(() => {
-    load()
-  }, [])
-  return (
-    <Sheet title="Reports" onClose={onClose}>
-      <p className="empty-note" style={{ paddingTop: 0 }}>
-        Everything Alexa wrote up for you: research, plans, comparisons and results.
-      </p>
-      {err && <p className="err">{err}</p>}
-      {list === null ? (
-        <span className="spinner" />
-      ) : list.length === 0 ? (
-        <p className="empty-note">No reports yet. Ask Alexa to research or plan something.</p>
-      ) : (
-        <ul className="list">
-          {list.map((r) => (
-            <li key={r.id}>
-              <button type="button" className="rowlink main" onClick={() => onOpenReport(r.id)}>
-                <div className="t1">{r.title}</div>
-                <div className="t2">
-                  {r.updatedAt !== r.createdAt ? 'Updated ' : ''}
-                  {ago(r.updatedAt)}
-                </div>
-              </button>
-              <a className="icon-btn muted" style={{ width: 36, height: 36 }} href={api.reportDownloadURL(r.id)} download aria-label={`Download ${r.title}`}>
-                <Download size={16} />
-              </a>
-              <button
-                type="button"
-                className="icon-btn muted"
-                style={{ width: 36, height: 36 }}
-                aria-label={`Delete ${r.title}`}
-                onClick={async () => {
-                  if (!confirm(`Delete “${r.title}”?`)) return
-                  await api.deleteReport(r.id).catch((e) => setErr(e.message))
-                  load()
-                }}
-              >
-                <Trash size={16} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </Sheet>
   )
 }
 
@@ -366,66 +316,146 @@ export function MemorySheet({ onClose }: { onClose: () => void }) {
   )
 }
 
-// ---------- files ----------
+// ---------- logins ----------
 
-export function FilesSheet({ onClose }: { onClose: () => void }) {
-  const [list, setList] = useState<FileInfo[] | null>(null)
+// LoginsSheet lists the logins Alexa can sign in with. Passwords go in and
+// never come back out.
+export function LoginsSheet({ onClose }: { onClose: () => void }) {
+  const [list, setList] = useState<Login[] | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState({ site: '', username: '', password: '' })
+  const [changing, setChanging] = useState<{ id: number; password: string } | null>(null)
   const [err, setErr] = useState('')
-  const load = () => api.files().then((f) => setList(f.filter((x) => !x.isDir))).catch((e) => setErr(e.message))
+  const load = () => api.logins().then(setList).catch((e) => setErr(e.message))
   useEffect(() => {
     load()
   }, [])
   return (
-    <Sheet title="Files" onClose={onClose}>
+    <Sheet
+      title="Logins"
+      onClose={onClose}
+      actions={
+        !adding && (
+          <button type="button" className="btn xs" onClick={() => setAdding(true)}>
+            Add
+          </button>
+        )
+      }
+    >
       <p className="empty-note" style={{ paddingTop: 0 }}>
-        Your private workspace: uploads, downloads and files Alexa creates.
+        Alexa signs in with these when a site asks, for example after a session expires. Passwords are encrypted on your server, are never shown to Alexa’s model or sent back to this app, and are only typed into the site they belong to.
       </p>
-      <label className="btn sm" style={{ marginBottom: 8 }}>
-        Upload
-        <input
-          type="file"
-          multiple
-          className="sr"
-          onChange={async (e) => {
-            for (const f of Array.from(e.target.files || [])) await api.upload(f).catch((x) => setErr(x.message))
-            load()
+      {adding && (
+        <form
+          className="sec"
+          autoComplete="off"
+          onSubmit={async (e) => {
+            e.preventDefault()
+            setErr('')
+            try {
+              await api.addLogin({ ...form, site: siteAddress(form.site) })
+              setAdding(false)
+              setForm({ site: '', username: '', password: '' })
+              load()
+            } catch (x) {
+              setErr((x as Error).message)
+            }
           }}
-        />
-      </label>
-      {err && <p className="err">{err}</p>}
-      {list === null ? (
-        <span className="spinner" />
-      ) : list.length === 0 ? (
-        <p className="empty-note">No files yet.</p>
-      ) : (
-        <ul className="list">
-          {list.map((f) => (
-            <li key={f.path}>
-              <a className="main" href={api.fileURL(f.path, true)} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
-                <div className="t1">{f.path}</div>
-                <div className="t2">
-                  {fmtSize(f.size)} · {ago(f.modTime)}
-                </div>
-              </a>
-              <a className="icon-btn muted" style={{ width: 36, height: 36 }} href={api.fileURL(f.path)} download aria-label={`Download ${f.path}`}>
-                <Download size={16} />
-              </a>
-              <button
-                type="button"
-                className="icon-btn muted"
-                style={{ width: 36, height: 36 }}
-                aria-label={`Delete ${f.path}`}
-                onClick={async () => {
-                  await api.deleteFile(f.path)
-                  load()
-                }}
-              >
-                <Trash size={16} />
-              </button>
-            </li>
-          ))}
-        </ul>
+        >
+          <div className="field">
+            <label htmlFor="lg-site">Site</label>
+            <input id="lg-site" required autoCapitalize="none" autoCorrect="off" spellCheck={false} value={form.site} onChange={(e) => setForm({ ...form, site: e.target.value })} placeholder="amazon.com" />
+          </div>
+          <div className="inline">
+            <div className="field">
+              <label htmlFor="lg-user">Username or email</label>
+              <input id="lg-user" required autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} data-1p-ignore="" data-lpignore="true" />
+            </div>
+            <div className="field">
+              <label htmlFor="lg-pw">Password</label>
+              <input id="lg-pw" required type="password" autoComplete="off" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} data-1p-ignore="" data-lpignore="true" />
+            </div>
+          </div>
+          <div className="row-btns" style={{ marginTop: 14 }}>
+            <button type="submit" className="btn primary sm">
+              Save
+            </button>
+            <button type="button" className="btn sm" onClick={() => setAdding(false)}>
+              Cancel
+            </button>
+          </div>
+        </form>
       )}
+      {err && <p className="err">{err}</p>}
+      <div className="sec">
+        {list === null ? (
+          <span className="spinner" />
+        ) : list.length === 0 ? (
+          <p className="empty-note">No saved logins yet. When Alexa needs to sign in somewhere, it asks you in the app, and you can save the login for next time.</p>
+        ) : (
+          <ul className="list">
+            {list.map((l) => (
+              <li key={l.id}>
+                <div className="main">
+                  <div className="t1">{l.site}</div>
+                  <div className="t2">
+                    {l.username} · {l.usedAt ? `used ${ago(l.usedAt)}` : `saved ${ago(l.updatedAt)}`}
+                  </div>
+                  {changing?.id === l.id && (
+                    <form
+                      className="inline"
+                      style={{ marginTop: 8 }}
+                      autoComplete="off"
+                      onSubmit={async (e) => {
+                        e.preventDefault()
+                        setErr('')
+                        try {
+                          await api.updateLogin(l.id, { password: changing.password })
+                          setChanging(null)
+                          load()
+                        } catch (x) {
+                          setErr((x as Error).message)
+                        }
+                      }}
+                    >
+                      <div className="field" style={{ marginTop: 0 }}>
+                        <label htmlFor={`lg-new-${l.id}`} className="sr">
+                          New password for {l.site}
+                        </label>
+                        <input id={`lg-new-${l.id}`} type="password" required autoFocus autoComplete="off" placeholder="New password" value={changing.password} onChange={(e) => setChanging({ id: l.id, password: e.target.value })} data-1p-ignore="" data-lpignore="true" />
+                      </div>
+                      <button type="submit" className="btn sm primary">
+                        Save
+                      </button>
+                      <button type="button" className="btn sm" onClick={() => setChanging(null)}>
+                        Cancel
+                      </button>
+                    </form>
+                  )}
+                </div>
+                {changing?.id !== l.id && (
+                  <button type="button" className="btn xs" onClick={() => setChanging({ id: l.id, password: '' })}>
+                    Change password
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="icon-btn muted"
+                  style={{ width: 36, height: 36 }}
+                  aria-label={`Delete the login for ${l.site}`}
+                  onClick={async () => {
+                    if (!confirm(`Delete the login for ${l.site} (${l.username})?`)) return
+                    await api.deleteLogin(l.id).catch((e) => setErr(e.message))
+                    load()
+                  }}
+                >
+                  <Trash size={16} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </Sheet>
   )
 }
@@ -541,6 +571,8 @@ export function SettingsSheet({ user, config, onSaved, onClose, conversation }: 
         {err && <p className="err">{err}</p>}
       </form>
 
+      <Appearance />
+
       <div className="sec">
         <p className="sec-title">Notifications</p>
         <p className="empty-note" style={{ paddingTop: 0 }}>
@@ -609,6 +641,40 @@ export function SettingsSheet({ user, config, onSaved, onClose, conversation }: 
         </div>
       )}
     </Sheet>
+  )
+}
+
+const themes: [Theme, string][] = [
+  ['system', 'System'],
+  ['light', 'Light'],
+  ['dark', 'Dark'],
+]
+
+function Appearance() {
+  const [theme, set] = useState(getTheme)
+  return (
+    <div className="sec">
+      <p className="sec-title">Appearance</p>
+      <div className="seg" role="radiogroup" aria-label="Appearance">
+        {themes.map(([t, label]) => (
+          <button
+            key={t}
+            type="button"
+            role="radio"
+            aria-checked={theme === t}
+            onClick={() => {
+              setTheme(t)
+              set(t)
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <p className="field help" style={{ marginTop: 8 }}>
+        On this device. System follows your device’s light or dark setting.
+      </p>
+    </div>
   )
 }
 

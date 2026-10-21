@@ -10,9 +10,10 @@ import (
 )
 
 type Config struct {
-	Addr      string
-	DataDir   string
-	PublicURL string
+	Addr         string
+	DataDir      string
+	PublicURL    string
+	VaultKeyFile string // the key saved logins are encrypted with
 
 	APIKey          string
 	BaseURL         string
@@ -71,6 +72,7 @@ func Load() *Config {
 		Addr:            env("ADDR", ":8080"),
 		DataDir:         data,
 		PublicURL:       strings.TrimRight(env("PUBLIC_URL", ""), "/"),
+		VaultKeyFile:    env("VAULT_KEY_FILE", filepath.Join(data, "vault.key")),
 		APIKey:          key,
 		BaseURL:         strings.TrimRight(env("META_BASE_URL", "https://api.meta.ai/v1"), "/"),
 		Model:           env("MODEL", "muse-spark-1.3-contributor"),

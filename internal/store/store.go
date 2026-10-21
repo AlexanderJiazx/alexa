@@ -77,7 +77,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(8)
-	if _, err := db.Exec(schema + sessionSchema); err != nil {
+	if _, err := db.Exec(schema + sessionSchema + loginSchema); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return &Store{db: db}, nil
