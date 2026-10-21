@@ -582,12 +582,12 @@ func (rt *Runtime) buildInput(ctx context.Context, userID int64) ([]json.RawMess
 		}
 		items = append(items, si)
 	}
-	// Which function calls have outputs (others get a synthetic one).
-	answered := map[string]bool{}
-	for _, si := range items {
+	// Where each function call's output is (calls without one get a synthetic one).
+	outputAt := map[string]int{}
+	for i, si := range items {
 		it := llm.ParseItem(si.Item)
 		if it.Type == "function_call_output" {
-			answered[it.CallID] = true
+			outputAt[it.CallID] = i
 		}
 	}
 	env := rt.envs.For(userID)
@@ -638,12 +638,36 @@ func (rt *Runtime) buildInput(ctx context.Context, userID int64) ([]json.RawMess
 		final = append(final, marshal(map[string]any{"role": "user", "content": []map[string]any{{"type": "input_text",
 			"text": "[Summary of the earlier part of our conversation, written when it was compacted]\n\n" + ss.Summary}}}))
 	}
-	// Insert synthetic outputs for unanswered calls (e.g. after a crash).
+	// A turn can put a message between its tool calls (call, message,
+	// call), but the API refuses a message between a call and its output:
+	// those outputs go before the message, as if the calls ran one at a
+	// time. Nothing else moves, so the prompt cache still matches.
+	placed := map[int]bool{}
+	var waiting []int // outputs, further on, of calls already replayed
 	for i, raw := range out {
-		final = append(final, raw)
+		if placed[i] {
+			continue
+		}
 		it := llm.ParseItem(items[i].Item)
-		if it.Type == "function_call" && !answered[it.CallID] {
+		if it.Type == "message" {
+			for _, j := range waiting {
+				if !placed[j] {
+					final = append(final, out[j])
+					placed[j] = true
+				}
+			}
+			waiting = waiting[:0]
+		}
+		final = append(final, raw)
+		placed[i] = true
+		if it.Type != "function_call" {
+			continue
+		}
+		if j, ok := outputAt[it.CallID]; !ok {
+			// Insert a synthetic output for an unanswered call (e.g. after a crash).
 			final = append(final, marshal(map[string]any{"type": "function_call_output", "call_id": it.CallID, "output": "Interrupted before this tool call completed; check the current state and retry if needed."}))
+		} else if j > i {
+			waiting = append(waiting, j)
 		}
 	}
 	return final, nil

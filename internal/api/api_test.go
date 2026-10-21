@@ -628,6 +628,63 @@ func TestCompaction(t *testing.T) {
 	c.wait("idle")
 }
 
+// A turn can put a message between its tool calls. The API refuses a
+// message between a call and its output, so those outputs are replayed
+// before it; calls made together otherwise replay just as they came.
+func TestReplayOrder(t *testing.T) {
+	e := newTestServer(t)
+	fm := e.model
+	c := e.client(t)
+	c.signup("dana")
+
+	order := func(req *llm.Request) string {
+		var o []string
+		for _, raw := range req.Input {
+			switch it := llm.ParseItem(raw); it.Type {
+			case "function_call":
+				o = append(o, "call "+it.CallID)
+			case "function_call_output":
+				o = append(o, "output "+it.CallID)
+			case "message":
+				o = append(o, "message")
+			}
+		}
+		return strings.Join(o, ", ")
+	}
+	id := func(call any) string { return call.(map[string]any)["call_id"].(string) }
+
+	a, b := fn("say", map[string]any{"text": "Looking now."}), fn("say", map[string]any{"text": "Found two."})
+	broken := fn("present_report", map[string]any{})
+	retry := fn("present_report", map[string]any{"title": "Black holes", "content": "## Size\n\nBig."})
+	together := fmt.Sprintf("call %s, call %s, output %s, output %s", id(a), id(b), id(a), id(b))
+	fm.script(
+		reply(900, a, b),
+		func(_ context.Context, req *llm.Request) ([]any, int64) {
+			if got := order(req); got != together {
+				t.Errorf("calls made together replay as %s, want %s", got, together)
+			}
+			return nil, 950
+		},
+		// As seen from the real model: a broken call, a note, the retry.
+		reply(1000, broken, say("That one was broken; fixing the report now."), retry),
+		func(_ context.Context, req *llm.Request) ([]any, int64) {
+			want := together + fmt.Sprintf(", call %s, output %s, message, call %s, output %s", id(broken), id(broken), id(retry), id(retry))
+			if got := order(req); got != want {
+				t.Errorf("replay = %s, want %s", got, want)
+			}
+			return []any{fn("say", map[string]any{"text": "Report's up."})}, 1100
+		},
+		reply(1200),
+	)
+	c.send("look something up")
+	c.wait("idle")
+	c.send("how big are black holes?")
+	s := c.wait("idle")
+	if got := lastN(s.Feed, 2); strings.Join(got, "|") != "report:Black holes|say:Report's up." {
+		t.Fatalf("feed tail = %v", got)
+	}
+}
+
 // Alexa's own memory_save leaves the instructions alone, so the long
 // conversation cached after them survives; compaction and the user's own
 // edits bring them up to date.
