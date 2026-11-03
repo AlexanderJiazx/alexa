@@ -1,0 +1,25 @@
+/* Checklist (WP-04): one row per item on a surface, divided by hairlines.
+   Status is a mark and a word, never colour alone. */
+
+.b-check { list-style: none; margin: 0; padding: var(--s1) 0; }
+.b-check li { display: flex; align-items: flex-start; gap: var(--s3); padding: var(--s2) var(--s4); }
+.b-check li + li { border-top: 1px solid var(--line); }
+.b-check-mark { flex: none; display: flex; padding-top: 1px; }
+.b-check-body { min-width: 0; display: flex; flex-direction: column; }
+.b-check-body .t { font: 400 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--ink); overflow-wrap: anywhere; }
+.b-check-body .note { font: 400 var(--t-small) var(--font); color: var(--text-3); overflow-wrap: anywhere; }
+
+.b-check .s-done .b-check-mark { color: var(--ok); }
+.b-check .s-done svg .fill { fill: var(--ok); stroke: none; }
+.b-check .s-done svg .on { stroke: var(--on-ink); }
+.b-check .s-failed .b-check-mark { color: var(--bad); }
+.b-check .s-failed svg .fill { fill: var(--bad); stroke: none; }
+.b-check .s-failed svg .on { stroke: var(--on-ink); }
+.b-check .s-failed .note { color: var(--text-2); }
+.b-check .s-todo .b-check-mark { color: var(--text-4); }
+.b-check .s-skipped .b-check-mark { color: var(--text-4); }
+.b-check .s-skipped .t { color: var(--text-3); }
+
+@container blocks (max-width: 379px) {
+  .b-check li { padding: var(--s2) var(--s3); }
+}

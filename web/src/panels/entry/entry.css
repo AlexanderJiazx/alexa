@@ -1,0 +1,13 @@
+/* The entry panel (WP-04): an entry's blocks with room to breathe, up to
+   760px wide, what Alexa said above them as the lede. */
+
+.entry-doc { max-width: 760px; margin: 0 auto; padding: var(--s8) 0 var(--s10); }
+.entry-lede { margin-bottom: var(--s6); font: 400 var(--t-read) var(--font); letter-spacing: var(--tr-read); color: var(--text-2); text-wrap: pretty; overflow-wrap: anywhere; }
+/* The first block's title is the panel's; its count stays. */
+.entry-doc.named .blocks > .b:first-child .b-head .b-title { display: none; }
+.entry-gone { padding: var(--s10) 0; text-align: center; font: 400 var(--t-body) var(--font); color: var(--text-3); }
+
+@media (max-width: 640px) {
+  .entry-doc { padding: var(--s5) 0 var(--s8); }
+  .entry-lede { margin-bottom: var(--s5); }
+}

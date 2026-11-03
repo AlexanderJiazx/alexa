@@ -1,0 +1,33 @@
+/* Timeline (WP-04): days, each a short rail of stops. The time sits to the
+   left in tabular figures, the kind's glyph on the rail, then the stop. */
+
+.b-timeline { --time-w: 64px; --glyph: 24px; }
+.b-day { padding: var(--s4) var(--s4) var(--s3); }
+.b-day + .b-day { border-top: 1px solid var(--line); }
+.b-day-head { display: flex; align-items: baseline; gap: var(--s2); margin: 0 0 var(--s3); padding-left: calc(var(--time-w) + var(--s3) + var(--glyph) + var(--s3)); font: 600 var(--t-small) var(--font); color: var(--ink); }
+.b-day-head .dow { font: 600 var(--t-micro) var(--font); letter-spacing: var(--tr-caps); text-transform: uppercase; color: var(--text-3); }
+
+.b-rail { list-style: none; margin: 0; padding: 0; }
+.b-stop { position: relative; display: grid; grid-template-columns: var(--time-w) var(--glyph) minmax(0, 1fr); column-gap: var(--s3); padding-bottom: var(--s4); }
+.b-stop:last-child { padding-bottom: var(--s1); }
+.b-stop:not(:last-child)::before { content: ''; position: absolute; top: calc(var(--glyph) + var(--s1)); bottom: var(--s1); left: calc(var(--time-w) + var(--s3) + var(--glyph) / 2 - .5px); border-left: 1px solid var(--line-strong); }
+.b-stop-time { padding-top: 3px; text-align: right; font: 500 var(--t-small) var(--font); color: var(--ink); white-space: nowrap; }
+.b-stop-end { display: block; font-weight: 400; color: var(--text-3); }
+.b-stop-glyph { width: var(--glyph); height: var(--glyph); display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--tile); border: 1px solid var(--line); color: var(--text-2); }
+.b-stop-glyph .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); }
+.b-stop.k-flight .b-stop-glyph { background: var(--ink); border-color: var(--ink); color: var(--on-ink); }
+.b-stop-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-top: 1px; }
+.b-stop-body b { font: 500 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--ink); overflow-wrap: anywhere; text-wrap: pretty; }
+.b-stop-place { display: inline-flex; align-items: center; gap: var(--s1); font: 400 var(--t-small) var(--font); color: var(--text-2); overflow-wrap: anywhere; }
+.b-stop-place svg.i { flex: none; color: var(--text-3); }
+.b-stop-note { font: 400 var(--t-small) var(--font); color: var(--text-3); overflow-wrap: anywhere; }
+.b-timeline-foot { display: flex; padding: var(--s3) var(--s4); border-top: 1px solid var(--line); }
+
+@container blocks (max-width: 379px) {
+  .b-timeline { --time-w: 56px; }
+  .b-day { padding: var(--s3) var(--s3) var(--s2); }
+  .b-stop { column-gap: var(--s2); }
+  .b-day-head { padding-left: calc(var(--time-w) + var(--s2) + var(--glyph) + var(--s2)); }
+  .b-stop:not(:last-child)::before { left: calc(var(--time-w) + var(--s2) + var(--glyph) / 2 - .5px); }
+  .b-timeline-foot { padding: var(--s3); }
+}

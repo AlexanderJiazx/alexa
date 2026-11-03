@@ -1,0 +1,27 @@
+/* Stats (WP-04): tiles on one surface. Hairlines between tiles come from
+   each tile's own left and top edge, pulled under the frame, so any count
+   and any wrap divides cleanly. */
+
+.b-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(148px, 1fr)); }
+.b-stat { min-width: 0; display: flex; flex-direction: column; gap: var(--s1); padding: var(--s4); margin: -1px 0 0 -1px; border-left: 1px solid var(--line); border-top: 1px solid var(--line); }
+.b-stat-label { font: 500 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-stat-value { font: 600 var(--t-title) var(--font); letter-spacing: var(--tr-title); color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.b-stats:is([data-n='1'], [data-n='2']) .b-stat-value { font: 600 var(--t-head) var(--font); letter-spacing: var(--tr-head); }
+.b-stat-foot { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); margin-top: 2px; }
+.b-delta svg.i { margin-left: -2px; }
+.b-stat-note { font: 400 var(--t-small) var(--font); color: var(--text-3); }
+
+/* One stat alone reads as a figure, not a tile. */
+.b-stats[data-n='1'] { grid-template-columns: minmax(0, 1fr); align-self: flex-start; width: fit-content; min-width: min(100%, 240px); max-width: 100%; }
+.b-stats[data-n='1'] .b-stat { padding-right: var(--s8); }
+@container blocks (min-width: 520px) {
+  .b-stats[data-n='4'] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .b-stats:is([data-n='5'], [data-n='6']) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@container blocks (max-width: 379px) {
+  .b-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .b-stats[data-n='1'] { grid-template-columns: minmax(0, 1fr); }
+  .b-stat { padding: var(--s3) var(--s4); }
+  .b-stats:is([data-n='3'], [data-n='5']) .b-stat:last-child { grid-column: span 2; }
+  .b-stats:not([data-n='1']) .b-stat-value { font: 600 var(--t-title) var(--font); letter-spacing: var(--tr-title); }
+}

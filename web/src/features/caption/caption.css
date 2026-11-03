@@ -1,0 +1,51 @@
+/* What keeps the conversation in reach around a panel (WP-07): the caption
+   above the composer when the sheet is at its full height, the follow pill,
+   the panel head's Following switch and the background job's chip. */
+
+/* ---------- the caption: one line just above the composer ---------- */
+.caption { display: flex; align-items: center; gap: var(--s3); min-height: 48px; padding: var(--s2) 0; border-top: 1px solid var(--line); animation: pIn var(--d-2) var(--ease-out) both; }
+.caption > .mark { flex: none; margin-left: var(--s1); }
+.caption > p { flex: 1; min-width: 0; margin: 0; font: 400 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--ink); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.caption.said { width: 100%; border-width: 1px 0 0; border-style: solid; border-color: var(--line); background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.caption.said.open > p { display: block; max-height: 30dvh; overflow-y: auto; }
+.caption.ask { flex-direction: column; align-items: stretch; gap: var(--s3); padding: var(--s3) 0; }
+.caption.login-form { padding: var(--s3) 0; }
+.caption.login-form .fields { margin-top: 0; flex-direction: row; flex-wrap: wrap; }
+
+/* ---------- the follow pill ---------- */
+/* A switch Alexa held back. It waits a beat before it shows, so a switch
+   that settles at once (the user's own, echoed back) never flashes it. */
+.follow-pill { display: flex; align-items: center; gap: var(--s2); max-width: 100%; height: 40px; padding: 0 var(--s1) 0 var(--s3); border-radius: var(--r-full); border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: 500 var(--t-small) var(--font); animation: pRise var(--d-2) var(--ease-out) 300ms both; }
+.fp-ic { flex: none; width: 16px; display: flex; align-items: center; justify-content: center; color: var(--text-2); }
+.fp-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-sub { color: var(--text-3); }
+.fp-sub::before { content: ' · '; }
+.fp-go { flex: none; height: 32px; padding: 0 var(--s3); border: 0; border-radius: var(--r-full); background: var(--ink); color: var(--on-ink); font: 600 var(--t-small) var(--font); cursor: pointer; transition: background-color var(--d-1), transform var(--d-1) var(--ease-out); }
+@media (hover: hover) {
+  .fp-go:hover { background: var(--ink-hover); }
+}
+.fp-go:active { transform: scale(.97); }
+@media (pointer: coarse) {
+  .fp-go { position: relative; }
+  .fp-go::after { content: ''; position: absolute; inset: -6px 0; }
+}
+.follow-pill .fp-x { margin-left: calc(-1 * var(--s1)); }
+
+/* ---------- the Follow switch, in a panel's head ---------- */
+/* A Chip (the same frame, surface and type) whose label is the switch's.
+   Its hit area reaches past it to a full 44px. */
+.follow-chip { position: relative; flex: none; display: inline-flex; align-items: center; gap: var(--s2); height: 32px; padding: 0 var(--s1) 0 var(--s3); border: 1px solid var(--line-strong); border-radius: var(--r-full); background: var(--surface); color: var(--ink); font: 500 var(--t-small) var(--font); white-space: nowrap; cursor: pointer; user-select: none; transition: border-color var(--d-1); }
+.follow-chip::after { content: ''; position: absolute; inset: -6px 0; }
+@media (hover: hover) {
+  .follow-chip:hover { border-color: var(--focus-line); }
+}
+/* In a phone-width head it's one word. */
+@media (max-width: 640px) {
+  .follow-chip { padding-left: var(--s2); }
+  .follow-chip .fc-more { display: none; }
+}
+
+/* ---------- a scheduled job at work off screen ---------- */
+.bg-chip { align-self: center; display: inline-flex; align-items: center; gap: var(--s2); height: 32px; max-width: 100%; padding: 0 var(--s4) 0 var(--s3); border-radius: var(--r-full); background: var(--tile); font: 500 var(--t-small) var(--font); color: var(--ink); animation: pRise var(--d-3) var(--ease-out) both; }
+.bg-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bg-sub { flex: none; color: var(--text-3); font-weight: 400; }

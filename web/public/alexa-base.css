@@ -1,0 +1,139 @@
+/* Alexa's base styles for HTML reports (WP-09).
+
+   The report panel puts this file, inline, into the head of every HTML
+   report, under <style id="alexa-theme">, which holds the app's design
+   tokens resolved for the current theme (src/panels/report/bridge.ts). A
+   page that uses the tokens, or none at all, then looks like the rest of
+   Alexa in light and dark, and follows a theme switch without a reload.
+
+   Every rule is wrapped in :where(), so it weighs nothing: the page's own
+   styles always win. Only tokens here, never a colour of its own. */
+
+:root {
+  color-scheme: light dark;
+  /* Plainer names for page authors; they follow the tokens. */
+  --text: var(--ink);
+  --muted: var(--text-2);
+  --subtle: var(--text-3);
+  --card: var(--surface);
+  --border: var(--line);
+  --accent: var(--ink);
+  /* Names from earlier versions, so older pages still look right. The
+     design is flat, so the old elevations are none. */
+  --surface-1: var(--surface);
+  --surface-2: var(--surface);
+  --raised: var(--surface);
+  --field: var(--surface);
+  --sunken: var(--tile);
+  --info: var(--text-2);
+  --info-bg: var(--tile);
+  --e1: none;
+  --e2: none;
+  --e3: none;
+}
+
+/* The universal selector weighs nothing already. */
+*, *::before, *::after { box-sizing: border-box; }
+
+:where(html) {
+  background: var(--surface);
+  color: var(--ink);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* The page keeps to a column a little wider than a report's measure (room
+   for charts beside the text), centred in a wide panel, like a document. */
+:where(body) {
+  max-width: calc(var(--measure) + 2 * var(--s14) + 2 * var(--s8));
+  margin: 0 auto;
+  padding: var(--s6) var(--s8) var(--s10);
+  font: 400 var(--t-body) var(--font);
+  letter-spacing: var(--tr-body);
+  color: var(--ink-2);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+@media (max-width: 520px) {
+  :where(body) { padding: var(--s4) var(--s4) var(--s8); }
+}
+
+/* Text */
+:where(h1, h2, h3, h4) { color: var(--ink); text-wrap: balance; }
+:where(h1) { margin: 0 0 var(--s3); font: 400 var(--t-head) var(--font-display); letter-spacing: var(--tr-head); }
+:where(h2) { margin: var(--s8) 0 var(--s3); font: 600 var(--t-title) var(--font); letter-spacing: var(--tr-title); }
+:where(h3) { margin: var(--s6) 0 var(--s2); font: 600 var(--t-body) var(--font); letter-spacing: var(--tr-body); }
+:where(h4) { margin: var(--s5) 0 var(--s1); font: 600 var(--t-small) var(--font); }
+:where(p) { margin: var(--s3) 0; text-wrap: pretty; }
+:where(strong, b) { font-weight: 600; color: var(--ink); }
+:where(small, .muted) { color: var(--text-2); }
+:where(.subtle, figcaption) { color: var(--text-3); font: 400 var(--t-small) var(--font); }
+:where(a) {
+  color: var(--ink);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklab, currentColor 35%, transparent);
+}
+:where(a:hover) { text-decoration-color: currentColor; }
+:where(ul, ol) { margin: var(--s3) 0; padding-left: var(--s6); }
+:where(li) { margin: var(--s1) 0; }
+:where(li)::marker { color: var(--text-3); }
+:where(blockquote) { margin: var(--s4) 0; padding: var(--s3) var(--s4); border-radius: var(--r-md); background: var(--tile); color: var(--text-2); }
+:where(hr) { margin: var(--s6) 0; border: 0; border-top: 1px solid var(--line); }
+:where(code, kbd, samp, pre) { font-family: var(--font-mono); font-size: .87em; }
+:where(code) { padding: 2px var(--s1); border-radius: var(--r-xs); background: var(--tile); }
+:where(pre) { margin: var(--s4) 0; padding: var(--s3) var(--s4); border-radius: var(--r-md); background: var(--tile); overflow-x: auto; line-height: 1.55; }
+:where(pre code) { padding: 0; background: none; font-size: inherit; }
+:where(img, svg, video, canvas) { max-width: 100%; }
+:where(img, video) { height: auto; }
+:where(figure) { margin: var(--s4) 0; }
+
+/* Tables: full width, a quiet header, numbers in tabular figures. */
+:where(table) { width: 100%; margin: var(--s4) 0; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+:where(th) { padding: var(--s2) var(--s3); background: var(--tile); color: var(--text-3); font: 500 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); text-align: left; }
+:where(td) { padding: var(--s3); border-top: 1px solid var(--line); vertical-align: top; }
+:where(.num, td.num, th.num) { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Controls */
+:where(button) {
+  height: 36px;
+  padding: 0 var(--s4);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background-color: var(--surface);
+  color: var(--ink);
+  font: 500 var(--t-small) var(--font);
+  cursor: pointer;
+  transition: border-color var(--d-1), transform var(--d-1);
+}
+:where(button:hover) { border-color: var(--focus-line); }
+:where(button:active) { transform: scale(.97); }
+:where(button:disabled) { opacity: .4; cursor: default; transform: none; }
+:where(button.primary) { border-color: var(--ink); background-color: var(--ink); color: var(--on-ink); font-weight: 600; }
+:where(input, select, textarea) {
+  font: inherit;
+  color: inherit;
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+}
+
+/* A few helpers a page can lean on. */
+:where(.card) { padding: var(--s4); border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface); }
+:where(.panel, .well) { padding: var(--s4); border-radius: var(--r-md); background: var(--tile); }
+:where(.grid) { display: grid; gap: var(--s3); grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+:where(.row) { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+:where(.stat) { font: 600 var(--t-head) var(--font); letter-spacing: var(--tr-head); color: var(--ink); font-variant-numeric: tabular-nums; }
+:where(.label) { font: 500 var(--t-micro) var(--font); letter-spacing: var(--tr-caps); text-transform: uppercase; color: var(--text-3); }
+:where(.ok) { color: var(--ok); }
+:where(.warn) { color: var(--warn); }
+:where(.bad) { color: var(--bad); }
+
+::selection { background: var(--select); }
+:where(:focus) { outline: none; }
+:where(:focus-visible) { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+}

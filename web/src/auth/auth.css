@@ -1,0 +1,40 @@
+/* Signing in (WP-12). No card: the dot draws itself in, then a serif
+   headline, the line under it and the form rise into place on the page
+   itself, a beat apart. */
+
+/* A column: the form takes the room above and below it (so it's centred
+   while it fits and simply scrolls when it doesn't), and the name sits at
+   the foot. */
+.auth {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow-y: auto;
+  background: var(--bg);
+  padding: max(var(--s6), env(safe-area-inset-top)) max(var(--s5), env(safe-area-inset-right)) max(var(--s5), env(safe-area-inset-bottom)) max(var(--s5), env(safe-area-inset-left));
+}
+.auth-form { flex: none; width: 100%; max-width: 360px; margin: auto 0; }
+.auth-form > .mark { display: block; }
+.auth h1 { margin-top: var(--s6); font: 400 var(--t-display) var(--font-display); letter-spacing: var(--tr-display); text-wrap: balance; animation: pRise var(--d-4) var(--ease-out) var(--d-2) both; }
+.auth .sub { margin-top: var(--s2); font: 400 var(--t-body) var(--font); color: var(--text-3); text-wrap: pretty; animation: pRise var(--d-4) var(--ease-out) calc(var(--d-2) + var(--stagger)) both; }
+.auth-fields { margin-top: var(--s8); animation: pRise var(--d-4) var(--ease-out) calc(var(--d-2) + 2 * var(--stagger)) both; }
+.auth-fields > .field:first-child { margin-top: 0; }
+/* On bare paper a well would vanish, so sign-in fields are raised a step
+   instead, 48px tall. */
+.auth .field.lg input { background-color: var(--surface); }
+.auth .field.lg input:focus { background-color: var(--surface); }
+.auth .err { margin-top: var(--s4); }
+.auth .btn.primary { margin-top: var(--s6); }
+.auth .btn.ghost { margin-top: var(--s2); color: var(--text-2); }
+@media (hover: hover) {
+  .auth .btn.ghost:hover { color: var(--ink); }
+}
+/* The name, small, in the corner: a product, not a form. */
+.auth-mark { flex: none; align-self: flex-start; margin-top: var(--s8); font: 600 var(--t-small) var(--font); letter-spacing: var(--tr-body); color: var(--text-3); }
+
+@media (max-width: 640px) {
+  .auth { padding-top: max(18vh, calc(env(safe-area-inset-top) + var(--s10))); }
+  .auth-form { margin: 0 0 auto; }
+}

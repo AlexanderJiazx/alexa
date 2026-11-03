@@ -1,0 +1,16 @@
+/* The dev gallery's own chrome. Development only; never in the app. */
+html:has(.g-page), html:has(.g-page) body, html:has(.g-page) #root { height: auto; }
+.gallery { min-height: 100dvh; background: var(--bg); color: var(--ink); }
+.g-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 12px 16px; background: var(--bg); border-bottom: 1px solid var(--line); }
+.g-bar h1 { margin: 0 8px 0 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.g-end { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; }
+.g-frames { display: flex; align-items: flex-start; gap: 24px; padding: 24px 16px 48px; overflow-x: auto; }
+.g-frame { flex: none; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.g-frame figcaption { font-size: 12px; font-weight: 500; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.g-frame iframe { display: block; border: 1px solid var(--line); border-radius: 16px; background: var(--bg); }
+.g-none { padding: 24px 16px; color: var(--text-2); }
+.g-page { padding: 24px 16px 32px; }
+.g-section { margin: 0 0 32px; }
+.g-section > h2 { margin: 0 0 12px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); }
+.g-json { margin: 8px 0 0; font-size: 12px; color: var(--text-2); }
+.g-json pre { margin: 8px 0 0; padding: 12px; overflow-x: auto; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); font-size: 12px; line-height: 1.5; }

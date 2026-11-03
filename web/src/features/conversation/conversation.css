@@ -1,0 +1,66 @@
+/* The exchange: what the user said, what Alexa said, time dividers and
+   quiet notes (WP-07/08). The ask, error and login entries are in
+   features/ask/ask.css; the report card in panels/report/report.css. */
+
+.more { align-self: center; flex: none; }
+.when { align-self: center; margin-top: var(--s3); font: 500 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); font-variant-numeric: tabular-nums; }
+
+.msg { max-width: 88%; animation: pRise var(--d-3) var(--ease-out) both; }
+.msg p { font: 400 var(--t-read) var(--font); letter-spacing: var(--tr-read); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* The user's words: a bubble that lifts off the page, its tail corner
+   toward the composer. */
+.msg.you { align-self: flex-end; max-width: 85%; padding: 10px var(--s4); border-radius: var(--r-lg) var(--r-lg) var(--r-xs) var(--r-lg); background: var(--surface); border: 1px solid var(--line); }
+
+/* Alexa's words: plain ink on the page. */
+.msg.agent { align-self: flex-start; }
+.msg.agent a { color: inherit; }
+.msg.muted p { font: 400 var(--t-body) var(--font); color: var(--text-2); }
+
+.att { display: flex; align-items: center; gap: 6px; margin-top: var(--s2); font: 500 var(--t-small) var(--font); color: var(--text-2); text-decoration: none; }
+.att:first-child { margin-top: 0; }
+@media (hover: hover) {
+  .att:hover { color: var(--ink); }
+}
+.note { align-self: center; display: inline-flex; align-items: center; gap: 6px; font: 500 var(--t-small) var(--font); color: var(--text-3); text-align: center; }
+.note svg.i { color: var(--text-4); }
+.linkish { padding: 0; border: 0; background: none; font: inherit; color: var(--text-2); text-decoration: underline; text-decoration-color: color-mix(in oklab, currentColor 35%, transparent); text-underline-offset: 3px; cursor: pointer; }
+@media (hover: hover) {
+  .linkish:hover { color: var(--ink); text-decoration-color: currentColor; }
+}
+/* A text link's target reaches 44px tall on touch screens. */
+@media (pointer: coarse) {
+  .linkish { position: relative; }
+  .linkish::after { content: ''; position: absolute; inset: -13px 0; }
+}
+
+@media (max-width: 640px) {
+  .msg { max-width: 92%; }
+}
+
+/* ---------- the exchange's messages (WP-08) ----------
+   The say, the user's bubble, notes and the follow-up chips, refined. */
+
+/* Alexa's words read like prose: the read size, ink, balanced lines. */
+.msg.agent { max-width: min(100%, 36em); }
+.msg.agent p { font: 400 var(--t-read) var(--font); letter-spacing: var(--tr-read); color: var(--ink); text-wrap: pretty; }
+
+/* The user's words read at the body size. */
+.msg.you p { font: 400 var(--t-body) var(--font); letter-spacing: var(--tr-body); }
+.att-pics { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--s1); margin: 2px -10px var(--s2); }
+.att-pic { display: block; width: 56px; height: 56px; overflow: hidden; border-radius: var(--r-sm); background: var(--tile); border: 1px solid var(--line); }
+.att-pic img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.msg.you .att { margin: 0 0 var(--s2); }
+.msg.you .att:last-child { margin-bottom: 0; }
+/* A form's or a multi-select's answer is a summary, not something typed. */
+.msg.you.summary p { font: 500 var(--t-small) var(--font); letter-spacing: 0; color: var(--text-2); }
+.msg-via { display: flex; align-items: center; gap: var(--s1); margin-bottom: 2px; font: 500 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); }
+
+/* Follow-ups sit just under the say they follow, and rise in one by one. */
+.follow-ups { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: calc(var(--s2) - var(--s4)); }
+.follow-up { animation: pRise var(--d-3) var(--ease-out) calc(120ms + var(--i, 0) * var(--stagger)) both; }
+.log:not(.settled) .follow-up { animation: none; }
+
+@media (max-width: 640px) {
+  .msg.you { max-width: 88%; }
+}

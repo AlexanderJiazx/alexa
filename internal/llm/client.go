@@ -8,10 +8,8 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"net/http/httptrace"
 	"strings"
@@ -22,6 +20,26 @@ type Client struct {
 	BaseURL string
 	APIKey  string
 	HTTP    *http.Client
+
+	// The retry layer (retry.go): how many attempts a call gets in all, how
+	// long its retries may take, and the backoff between them. Zero means
+	// the default; one attempt means no retries.
+	Attempts    int
+	RetryBudget time.Duration
+	BaseDelay   time.Duration
+	MaxDelay    time.Duration
+	// HeaderTimeout is how long a streaming request may wait for its
+	// response headers once it has gone out, and IdleTimeout how long its
+	// stream may go without sending anything. A non-streaming request sends
+	// nothing until its answer is complete, so it gets CreateTimeout for its
+	// headers instead. Any of them running out counts as a stall, which is
+	// retried: a half-open connection would otherwise hang for minutes.
+	HeaderTimeout time.Duration
+	IdleTimeout   time.Duration
+	CreateTimeout time.Duration
+
+	// sleep replaces waiting between retries, for tests.
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
 func New(baseURL, key string) *Client {
@@ -87,6 +105,10 @@ type Request struct {
 	MaxOutputTokens   int               `json:"max_output_tokens,omitempty"`
 	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
 	Text              any               `json:"text,omitempty"`
+
+	// OnRetry hears about each retry before its wait starts, so the user
+	// can be told the model is busy instead of watching a spinner.
+	OnRetry func(Retry) `json:"-"`
 }
 
 type Usage struct {
@@ -99,18 +121,6 @@ type Usage struct {
 	OutputTokensDetails struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
 	} `json:"output_tokens_details"`
-}
-
-type APIError struct {
-	Status  int
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Type    string `json:"type"`
-	Param   string `json:"param"`
-}
-
-func (e *APIError) Error() string {
-	return fmt.Sprintf("model API error %d (%s): %s", e.Status, e.Type, e.Message)
 }
 
 type Response struct {
@@ -183,68 +193,101 @@ func (it Item) Text() string {
 	return b.String()
 }
 
-func retryable(status int) bool {
-	return status == 429 || status == 408 || status >= 500
-}
-
-func (c *Client) post(ctx context.Context, path string, body any, accept string) (*http.Response, error) {
-	buf, err := json.Marshal(body)
+// post sends one request and returns the response if its status is a
+// success. Any other status comes back as an *APIError with the service's
+// message, bounded, and how long it asked to wait. sending is called as the
+// request goes out: for each piece of the body the transport takes, and
+// once it's all written.
+func (c *Client) post(ctx context.Context, path string, body []byte, accept string, sending func()) (*http.Response, error) {
+	newBody := func() io.ReadCloser { return io.NopCloser(&progressReader{r: bytes.NewReader(body), tick: sending}) }
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, newBody())
 	if err != nil {
 		return nil, err
 	}
-	var lastErr error
-	for attempt := 0; attempt < 6; attempt++ {
-		if attempt > 0 {
-			d := time.Duration(1<<attempt)*time.Second + time.Duration(rand.IntN(1000))*time.Millisecond
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(d):
-			}
-		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(buf))
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-		req.Header.Set("Content-Type", "application/json")
-		if accept != "" {
-			req.Header.Set("Accept", accept)
-		}
-		var tr connTrace
-		req = req.WithContext(httptrace.WithClientTrace(req.Context(), tr.hooks()))
-		start := time.Now()
-		resp, err := c.HTTP.Do(req)
-		tr.log(path, start, err)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			lastErr = err
-			slog.Warn("model API request failed, retrying", "err", err, "attempt", attempt)
-			continue
-		}
-		if resp.StatusCode >= 300 {
-			data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
-			apiErr := &APIError{Status: resp.StatusCode, Message: strings.TrimSpace(string(data))}
-			var wrap struct {
-				Error *APIError `json:"error"`
-			}
-			if json.Unmarshal(data, &wrap) == nil && wrap.Error != nil {
-				wrap.Error.Status = resp.StatusCode
-				apiErr = wrap.Error
-			}
-			lastErr = apiErr
-			if retryable(resp.StatusCode) {
-				slog.Warn("model API returned retryable status", "status", resp.StatusCode, "msg", apiErr.Message, "attempt", attempt)
-				continue
-			}
-			return nil, apiErr
-		}
+	// Not a bytes.Reader any more: say how long it is, and how to send it
+	// again on a pooled connection that turned out to be closed.
+	req.ContentLength = int64(len(body))
+	req.GetBody = func() (io.ReadCloser, error) { return newBody(), nil }
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	if accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+	var tr connTrace
+	hooks := tr.hooks()
+	if wrote := hooks.WroteRequest; sending != nil {
+		hooks.WroteRequest = func(i httptrace.WroteRequestInfo) { wrote(i); sending() }
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), hooks))
+	start := time.Now()
+	resp, err := c.HTTP.Do(req)
+	tr.log(path, start, err)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 300 {
 		return resp, nil
 	}
-	return nil, lastErr
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+	apiErr := &APIError{Status: resp.StatusCode, Message: bounded(string(data))}
+	var wrap struct {
+		Error *APIError `json:"error"`
+	}
+	if json.Unmarshal(data, &wrap) == nil && wrap.Error != nil {
+		wrap.Error.Status = resp.StatusCode
+		wrap.Error.Message = bounded(wrap.Error.Message)
+		apiErr = wrap.Error
+	}
+	apiErr.RetryAfter = retryHint(resp.StatusCode, resp.Header, apiErr.Message, time.Now())
+	slog.Warn("model API returned an error", "path", path, "status", resp.StatusCode, "code", apiErr.Code, "msg", apiErr.Message)
+	return nil, apiErr
+}
+
+// progressReader is a request body that calls tick each time the transport
+// reads more of it, which it does as fast as the upload goes.
+type progressReader struct {
+	r    io.Reader
+	tick func()
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 && p.tick != nil {
+		p.tick()
+	}
+	return n, err
+}
+
+// watchdog ends a request that makes no progress for too long as stalled.
+// Each feed starts the wait again: while the body goes out, a big request
+// on a slow uplink keeps it fed, and one stuck on a half-open connection
+// stops feeding it.
+type watchdog struct {
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	timer  *time.Timer
+}
+
+func newWatchdog(ctx context.Context, d time.Duration) *watchdog {
+	ctx, cancel := context.WithCancelCause(ctx)
+	return &watchdog{ctx: ctx, cancel: cancel, timer: time.AfterFunc(d, func() { cancel(errStalled) })}
+}
+
+// feed starts the wait again, for d.
+func (w *watchdog) feed(d time.Duration) { w.timer.Reset(d) }
+
+func (w *watchdog) stop() {
+	w.timer.Stop()
+	w.cancel(nil)
+}
+
+// err is errStalled when the watchdog is why the request failed, else err.
+func (w *watchdog) err(err error) error {
+	if errors.Is(context.Cause(w.ctx), errStalled) {
+		return errStalled
+	}
+	return err
 }
 
 // connTrace records how long each phase of a request took, so slow
@@ -288,52 +331,76 @@ func (t *connTrace) log(path string, start time.Time, err error) {
 // Create performs a non-streaming request.
 func (c *Client) Create(ctx context.Context, req *Request) (*Response, error) {
 	req.Stream = false
-	resp, err := c.post(ctx, "/responses", req, "")
+	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	var out Response
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	var out *Response
+	err = c.call(ctx, req.OnRetry, func(ctx context.Context) error {
+		wait := orDefault(c.CreateTimeout, defaultCreateTimeout)
+		w := newWatchdog(ctx, wait)
+		defer w.stop()
+		resp, err := c.post(w.ctx, "/responses", body, "", func() { w.feed(wait) })
+		if err != nil {
+			return w.err(err)
+		}
+		defer resp.Body.Close()
+		w.feed(orDefault(c.IdleTimeout, defaultIdleTimeout))
+		var r Response
+		if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+			return w.err(err)
+		}
+		if r.Error != nil {
+			// A 200 that carries an error reads like a failed stream.
+			e := streamError(r.Error.Code, r.Error.Type, r.Error.Message)
+			return e
+		}
+		out = &r
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	if out.Error != nil {
-		return &out, out.Error
-	}
-	return &out, nil
+	return out, nil
 }
 
 // Stream performs a streaming request, invoking fn for each event, and returns
-// the assembled response (output items in order).
+// the assembled response (output items in order). A retry after a stream
+// broke off sends fn the new attempt's events from the start.
 func (c *Client) Stream(ctx context.Context, req *Request, fn func(Event)) (*Response, error) {
 	req.Stream = true
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		out, err := c.streamOnce(ctx, req, fn)
-		if err == nil {
-			return out, nil
-		}
-		lastErr = err
-		var apiErr *APIError
-		if ctx.Err() != nil || (errors.As(err, &apiErr) && !retryable(apiErr.Status)) {
-			return nil, err
-		}
-		slog.Warn("stream failed, retrying", "err", err, "attempt", attempt)
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(time.Duration(2<<attempt) * time.Second):
-		}
-	}
-	return nil, lastErr
-}
-
-func (c *Client) streamOnce(ctx context.Context, req *Request, fn func(Event)) (*Response, error) {
-	resp, err := c.post(ctx, "/responses", req, "text/event-stream")
+	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
+	var out *Response
+	err = c.call(ctx, req.OnRetry, func(ctx context.Context) error {
+		r, err := c.streamOnce(ctx, body, fn)
+		out = r
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// streamOnce makes one streaming request. A watchdog cancels it when the
+// headers take longer than HeaderTimeout after the request went out (or
+// its upload stops moving for that long), or the stream then goes quiet
+// for IdleTimeout, and the request ends as stalled.
+func (c *Client) streamOnce(ctx context.Context, body []byte, fn func(Event)) (*Response, error) {
+	header, idle := orDefault(c.HeaderTimeout, defaultHeaderTimeout), orDefault(c.IdleTimeout, defaultIdleTimeout)
+	watchdog := newWatchdog(ctx, header)
+	defer watchdog.stop()
+	stalled := watchdog.err
+
+	resp, err := c.post(watchdog.ctx, "/responses", body, "text/event-stream", func() { watchdog.feed(header) })
+	if err != nil {
+		return nil, stalled(err)
+	}
 	defer resp.Body.Close()
+	watchdog.feed(idle)
 
 	items := map[int]json.RawMessage{}
 	maxIdx := -1
@@ -364,17 +431,22 @@ func (c *Client) streamOnce(ctx context.Context, req *Request, fn func(Event)) (
 			final = ev.Response
 		case "response.failed":
 			if ev.Response != nil && ev.Response.Error != nil {
-				ev.Response.Error.Status = 500
-				return ev.Response.Error
+				e := ev.Response.Error
+				return streamError(e.Code, e.Type, e.Message)
 			}
-			return &APIError{Status: 500, Message: "response failed"}
+			return streamError("", "", "")
 		case "error":
 			var e struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
+				Code    string    `json:"code"`
+				Type    string    `json:"type"`
+				Message string    `json:"message"`
+				Error   *APIError `json:"error"`
 			}
 			_ = json.Unmarshal([]byte(payload), &e)
-			return &APIError{Status: 500, Code: e.Code, Message: e.Message}
+			if e.Error != nil {
+				return streamError(e.Error.Code, e.Error.Type, e.Error.Message)
+			}
+			return streamError(e.Code, e.Type, e.Message)
 		}
 		if fn != nil {
 			fn(ev)
@@ -382,6 +454,7 @@ func (c *Client) streamOnce(ctx context.Context, req *Request, fn func(Event)) (
 		return nil
 	}
 	for sc.Scan() {
+		watchdog.feed(idle)
 		line := sc.Text()
 		if line == "" {
 			if err := flush(); err != nil {
@@ -397,13 +470,13 @@ func (c *Client) streamOnce(ctx context.Context, req *Request, fn func(Event)) (
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return nil, err
+		return nil, stalled(err)
 	}
 	if err := flush(); err != nil {
 		return nil, err
 	}
 	if final == nil {
-		return nil, errors.New("stream ended without completion")
+		return nil, stalled(errUnfinished)
 	}
 	// Prefer the items assembled from output_item.done events: completed
 	// payloads may omit encrypted reasoning.

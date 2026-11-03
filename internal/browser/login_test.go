@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+// evalString runs js in the tab's page and returns its value as text.
+func evalString(t *Tab, js string) (string, error) {
+	defer t.begin()()
+	var out any
+	if err := t.eval(js, &out); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%v", out), nil
+}
+
 // onSite allows a login into pages on one host.
 func onSite(host string) func(string) error {
 	return func(page string) error {
@@ -100,7 +110,7 @@ func TestFillLogin(t *testing.T) {
 	if len(st.Screenshot) != 0 || !strings.Contains(st.Text, "No screenshot") {
 		t.Errorf("a screenshot showing the password was kept (%d bytes)", len(st.Screenshot))
 	}
-	if got, err := tab.Eval(`getComputedStyle(document.getElementById('pass')).webkitTextSecurity`); err != nil || got != "disc" {
+	if got, err := evalString(tab, `getComputedStyle(document.getElementById('pass')).webkitTextSecurity`); err != nil || got != "disc" {
 		t.Errorf("the revealed field isn't masked on screen: %q, %v", got, err)
 	}
 	if got := tab.Redact("pass=hunter2_Correct%2AHorse%3C3, or hunter2\\_Correct\\*Horse&lt;3, or hunter2_Correct*H…"); strings.Contains(got, "Correct") {
@@ -128,7 +138,7 @@ func TestFillSpoofedField(t *testing.T) {
 	if err := tab.Fill(pw, "bank-secret-1", true, onSite("example.com")); err == nil {
 		t.Fatal("a login for example.com went into a page only claiming to be it")
 	}
-	if got, _ := tab.Eval(`document.getElementById('pw').value`); got != "" {
+	if got, _ := evalString(tab, `document.getElementById('pw').value`); got != "" {
 		t.Fatalf("the field holds %q", got)
 	}
 }

@@ -1,0 +1,8 @@
+/* The blocks' gallery page only (development). Frames for the panel and
+   report placements, at their real widths. */
+.g-blocks-panel { max-width: 760px; margin: 0 auto; padding: var(--s6); border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line); }
+.g-blocks-report.report { padding: 0; }
+/* The exchange's column, as wide as the app makes it. */
+.g-blocks { --col-max: 680px; }
+.g-blocks .log-inner { min-height: 0; }
+.g-blocks-entry { height: 720px; max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; }

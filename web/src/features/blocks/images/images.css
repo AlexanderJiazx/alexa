@@ -1,0 +1,43 @@
+/* Images (WP-04): a gallery of fixed boxes, and the lightbox. */
+
+.b-shots { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
+.b-shots[data-n='1'] { grid-template-columns: minmax(0, 1fr); }
+.b-shots[data-n='3'] > .b-shot:first-child { grid-column: span 2; }
+.b-shot { min-width: 0; display: flex; flex-direction: column; gap: var(--s1); }
+.b-shot-btn { display: block; width: 100%; padding: 0; border: 0; border-radius: var(--r-md); background: none; cursor: zoom-in; transition: transform var(--d-2) var(--ease-out); }
+.b-shot-btn:active { transform: scale(.985); }
+.b-shot-btn .b-img { border-radius: var(--r-md); }
+@media (hover: hover) {
+  .b-shot-btn:hover .b-img img { transform: scale(1.015); }
+}
+.b-shot-btn .b-img img { transition: opacity var(--d-3) var(--ease-out), transform var(--d-4) var(--ease-out); }
+.b-shot-cap { font: 400 var(--t-small) var(--font); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-shots-row .b-shot { flex: 0 0 200px; scroll-snap-align: start; }
+.b-shots-row .b-arrow { top: calc(50% - 30px); }
+
+/* ---------- the lightbox ---------- */
+.b-lightbox { width: 100vw; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 0; border: 0; background: transparent; color: var(--canvas); overflow: hidden; animation: pIn var(--d-2) var(--ease-out) both; }
+.b-lightbox::backdrop { background: color-mix(in oklab, black 94%, transparent); animation: pIn var(--d-2) both; }
+.b-lightbox.leaving { animation: pOut var(--d-1) both; }
+.b-lightbox.leaving::backdrop { animation: pOut var(--d-1) both; }
+.b-lb-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 1; display: flex; align-items: center; gap: var(--s3); padding: max(var(--s2), env(safe-area-inset-top)) var(--s2) var(--s2) var(--s4); }
+.b-lb-count { font: 500 var(--t-small) var(--font); color: color-mix(in oklab, var(--canvas) 72%, transparent); }
+.b-lb-link { display: inline-flex; align-items: center; gap: var(--s1); font: 500 var(--t-small) var(--font); color: var(--canvas); text-decoration: none; }
+@media (hover: hover) {
+  .b-lb-link:hover { text-decoration: underline; }
+}
+.b-lightbox .icon-btn { color: var(--canvas); }
+@media (hover: hover) {
+  .b-lightbox .icon-btn:hover { background: color-mix(in oklab, var(--canvas) 14%, transparent); }
+}
+.b-lb-close { margin-left: auto; }
+.b-lb-fig { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s3); padding: var(--s14) var(--s14) var(--s8); }
+.b-lb-fig img { min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-sm); animation: pPop var(--d-3) var(--ease-out) both; }
+.b-lb-fig figcaption { flex: none; max-width: 640px; text-align: center; font: 400 var(--t-body) var(--font); color: color-mix(in oklab, var(--canvas) 82%, transparent); text-wrap: balance; }
+.b-lb-nav { position: absolute; top: calc(50% - 22px); z-index: 1; }
+.b-lb-nav.prev { left: var(--s2); }
+.b-lb-nav.next { right: var(--s2); }
+@media (max-width: 640px) {
+  .b-lb-fig { padding: var(--s14) var(--s2) var(--s10); }
+  .b-lb-nav { top: auto; bottom: max(var(--s2), env(safe-area-inset-bottom)); }
+}

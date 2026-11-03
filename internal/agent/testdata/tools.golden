@@ -1,0 +1,1796 @@
+[
+  {
+    "description": "Open a URL in the shared browser (the user sees it live). Returns the page state.",
+    "name": "browser_open",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        },
+        "url": {
+          "description": "Absolute URL, or a domain like example.com",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Click the element with the given index from the latest browser state.",
+    "name": "browser_click",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "index": {
+          "description": "Element index",
+          "type": "integer"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Click at viewport pixel coordinates of the latest screenshot (only when the target has no index).",
+    "name": "browser_click_at",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "double": {
+          "description": "Double-click",
+          "type": "boolean"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        },
+        "x": {
+          "description": "X in pixels",
+          "type": "number"
+        },
+        "y": {
+          "description": "Y in pixels",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Type text into the element with the given index (focuses it first). Replaces existing text unless clear=false. Set submit=true to press Enter afterwards. Date, time and slider inputs get the value set directly: pass e.g. 2026-11-15, 19:30 or 4. The result says if the field ends up showing something else.",
+    "name": "browser_type",
+    "parameters": {
+      "properties": {
+        "clear": {
+          "description": "Clear existing value first (default true)",
+          "type": "boolean"
+        },
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "index": {
+          "description": "Element index (0 = currently focused element)",
+          "type": "integer"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        },
+        "submit": {
+          "description": "Press Enter after typing",
+          "type": "boolean"
+        },
+        "text": {
+          "description": "Text to type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "text",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Move the mouse over an element (by index) or a point (x, y), for menus and tooltips that only appear on hover.",
+    "name": "browser_hover",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "index": {
+          "description": "Element index",
+          "type": "integer"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        },
+        "x": {
+          "description": "X in pixels (when there's no index)",
+          "type": "number"
+        },
+        "y": {
+          "description": "Y in pixels",
+          "type": "number"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Drag from one element or point to another: drag and drop, reordering, sliders and handles. Give each end as an element index or as x/y coordinates; both ends must be in view.",
+    "name": "browser_drag",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "from_index": {
+          "description": "Element to drag",
+          "type": "integer"
+        },
+        "from_x": {
+          "description": "Start X (when there's no index)",
+          "type": "number"
+        },
+        "from_y": {
+          "description": "Start Y",
+          "type": "number"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        },
+        "to_index": {
+          "description": "Element to drop on",
+          "type": "integer"
+        },
+        "to_x": {
+          "description": "End X (when there's no index)",
+          "type": "number"
+        },
+        "to_y": {
+          "description": "End Y",
+          "type": "number"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Answer the confirm or prompt dialog the page is showing (the browser state says when one is open; the page is frozen until it's answered). accept=true clicks OK, false clicks Cancel. For a prompt, text is what to type into it. A confirm can be consequential (\"Delete this?\"): check with the user first when it is.",
+    "name": "browser_answer_dialog",
+    "parameters": {
+      "properties": {
+        "accept": {
+          "description": "true for OK, false for Cancel",
+          "type": "boolean"
+        },
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        },
+        "text": {
+          "description": "For a prompt: the text to enter",
+          "type": "string"
+        }
+      },
+      "required": [
+        "accept",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Press a key or key combination in the browser, e.g. Enter, Escape, Tab, ArrowDown, PageDown, Control+a.",
+    "name": "browser_key",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "keys": {
+          "description": "Key or combination",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "keys",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Scroll the page (or the scrollable area under an element).",
+    "name": "browser_scroll",
+    "parameters": {
+      "properties": {
+        "direction": {
+          "enum": [
+            "down",
+            "up",
+            "left",
+            "right",
+            "top",
+            "bottom"
+          ],
+          "type": "string"
+        },
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "index": {
+          "description": "Optional element inside the area to scroll",
+          "type": "integer"
+        },
+        "pages": {
+          "description": "How far, in viewport heights (default 0.8)",
+          "type": "number"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "direction",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Choose an option in a \u003cselect\u003e dropdown by its visible text or value.",
+    "name": "browser_select",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "index": {
+          "description": "Index of the \u003cselect\u003e",
+          "type": "integer"
+        },
+        "option": {
+          "description": "Option text or value",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "option",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Go back or forward in the browser history, or reload.",
+    "name": "browser_history",
+    "parameters": {
+      "properties": {
+        "action": {
+          "enum": [
+            "back",
+            "forward",
+            "reload"
+          ],
+          "type": "string"
+        },
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Get the current browser state (after waiting for something, or to re-check the page).",
+    "name": "browser_state",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        },
+        "wait_seconds": {
+          "description": "Seconds to wait before reading (max 30)",
+          "type": "number"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Attach workspace files to a file input element.",
+    "name": "browser_upload",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "index": {
+          "description": "Index of the file input (or the element containing it)",
+          "type": "integer"
+        },
+        "paths": {
+          "description": "Workspace paths",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "paths",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Read the full text of the current page as markdown (for extracting information without scrolling). Long pages are paged; pass offset to continue.",
+    "name": "browser_read",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "offset": {
+          "description": "Character offset to start from (default 0)",
+          "type": "integer"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Sign in with the user's saved login for the site open in the browser. The system types the username and password into the fields you give; you never see the password. Give the index of the username or email field, of the password field, or both (when a site asks for them on separate pages, call this on each page). If there's no saved login for the site, it says so: then call request_login.",
+    "name": "browser_login",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "password_index": {
+          "description": "Index of the password field",
+          "type": "integer"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        },
+        "submit": {
+          "description": "Press Enter after filling in",
+          "type": "boolean"
+        },
+        "username": {
+          "description": "Which saved account to use, when there are several for the site",
+          "type": "string"
+        },
+        "username_index": {
+          "description": "Index of the username or email field",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Ask the user to sign in to a site through a secure form on their screen: they type their username and password there, and can save them so you can sign in by yourself next time (for example when the session expires). You never see the password. When they've entered it, call browser_login to fill in the sign-in form. Use this when browser_login says there's no saved login for the site, or the saved one was rejected. Calls after this one in the same turn don't run; call them again after the user answers.",
+    "name": "request_login",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Short note shown above the form, e.g. \"Your Amazon session expired\"",
+          "type": "string"
+        },
+        "site": {
+          "description": "The site to sign in to, when it isn't the one open in the browser (e.g. the sign-in form is in a frame from another site)",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Pause and ask the user to take over the shared browser — for 2FA codes, CAPTCHAs, payment details, or anything else only they can do on the page (for signing in, use browser_login and request_login). Their screen switches to the browser. You resume when they hand back control. Calls after this one in the same turn don't run; call them again after the user answers.",
+    "name": "request_takeover",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Short instruction shown to the user, e.g. \"Sign in to continue\"",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Send the user a short message. This is the only way the user sees anything you write: your plain text output is hidden. For a task you've done, a few words: \"Done.\" or \"Done. \u003cthe state they need\u003e\". Otherwise one or two plain sentences, under 300 characters, no headings, lists or tables. Attach blocks only for things to choose between, compare or check (see Showing results). Messages are pushed to the user's phone automatically when they're away.",
+    "name": "say",
+    "parameters": {
+      "properties": {
+        "blocks": {
+          "description": "Up to 3 blocks shown under the message (see Showing results)",
+          "items": {
+            "properties": {
+              "align": {
+                "description": "table: how each column is aligned",
+                "items": {
+                  "enum": [
+                    "left",
+                    "right",
+                    "center"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "columns": {
+                "description": "table: the column headings (up to 6)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "currency": {
+                "description": "chart: the ISO currency of the values",
+                "type": "string"
+              },
+              "days": {
+                "description": "timeline: [{date, items: [{time, end, title, kind, place, note}]}]",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "items": {
+                "description": "cards: the cards; compare: [{name, price, pick}]; stats, checklist, links and images: their entries; files: [{path}]",
+                "items": {},
+                "type": "array"
+              },
+              "kind": {
+                "description": "cards: what the cards are",
+                "enum": [
+                  "product",
+                  "place",
+                  "stay",
+                  "flight",
+                  "event",
+                  "item"
+                ],
+                "type": "string"
+              },
+              "lines": {
+                "description": "receipt: [{label, value}]",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "marks": {
+                "description": "chart: up to 5 of {x, label}",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "merchant": {
+                "description": "receipt: who it's from",
+                "type": "string"
+              },
+              "ref": {
+                "description": "receipt: the order or booking reference",
+                "type": "string"
+              },
+              "rows": {
+                "description": "table: one list of cells per row; compare: [{label, values, best}]",
+                "items": {},
+                "type": "array"
+              },
+              "series": {
+                "description": "chart: up to 3 of {name, points: [{x, y}]}",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "description": "receipt",
+                "enum": [
+                  "draft",
+                  "pending",
+                  "confirmed",
+                  "cancelled",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "style": {
+                "description": "chart",
+                "enum": [
+                  "line",
+                  "bar"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "description": "callout: under 280 characters; markdown (reports only): the prose",
+                "type": "string"
+              },
+              "title": {
+                "description": "Optional heading, under 60 characters",
+                "type": "string"
+              },
+              "tone": {
+                "description": "callout",
+                "enum": [
+                  "info",
+                  "tip",
+                  "warning",
+                  "success"
+                ],
+                "type": "string"
+              },
+              "total": {
+                "description": "receipt: the total",
+                "properties": {
+                  "amount": {
+                    "description": "Amount",
+                    "type": "number"
+                  },
+                  "currency": {
+                    "description": "ISO currency code, e.g. USD",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "type": {
+                "description": "The block type",
+                "enum": [
+                  "cards",
+                  "compare",
+                  "table",
+                  "stats",
+                  "chart",
+                  "timeline",
+                  "checklist",
+                  "receipt",
+                  "links",
+                  "images",
+                  "files",
+                  "callout",
+                  "markdown"
+                ],
+                "type": "string"
+              },
+              "unit": {
+                "description": "chart: the unit of the values",
+                "type": "string"
+              },
+              "verdict": {
+                "description": "compare: the conclusion in one line",
+                "type": "string"
+              },
+              "x": {
+                "description": "chart: what the x axis shows",
+                "enum": [
+                  "time",
+                  "category"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "email": {
+          "description": "Also email it (only when they asked for email)",
+          "type": "boolean"
+        },
+        "final": {
+          "description": "True when this message ends your work on the request",
+          "type": "boolean"
+        },
+        "push": {
+          "description": "Also push it to their phone even if they have Alexa open (alerts, reminders)",
+          "type": "boolean"
+        },
+        "sources": {
+          "description": "Web pages you relied on for this message, up to 6",
+          "items": {
+            "properties": {
+              "title": {
+                "description": "Title",
+                "type": "string"
+              },
+              "url": {
+                "description": "URL",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "suggestions": {
+          "description": "Up to 3 short follow-ups the user might tap, in their words, under 40 characters each (e.g. \"Track the price\")",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "text": {
+          "description": "The message, as you'd say it aloud",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Ask the user a question and wait for the answer — to confirm consequential actions (purchases, sending, booking, deleting) or to resolve real ambiguity. Short and self-contained, under 300 characters. Offer options when there are clear choices, and mark the one you'd pick with recommended. Before buying, booking or sending, set confirm and put a draft receipt in blocks. Calls after this one in the same turn don't run; call them again after the user answers.",
+    "name": "ask",
+    "parameters": {
+      "properties": {
+        "blocks": {
+          "description": "Up to 2 blocks of context shown with the question: a draft receipt, or the cards being chosen between (see Showing results)",
+          "items": {
+            "properties": {
+              "align": {
+                "description": "table: how each column is aligned",
+                "items": {
+                  "enum": [
+                    "left",
+                    "right",
+                    "center"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "columns": {
+                "description": "table: the column headings (up to 6)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "currency": {
+                "description": "chart: the ISO currency of the values",
+                "type": "string"
+              },
+              "days": {
+                "description": "timeline: [{date, items: [{time, end, title, kind, place, note}]}]",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "items": {
+                "description": "cards: the cards; compare: [{name, price, pick}]; stats, checklist, links and images: their entries; files: [{path}]",
+                "items": {},
+                "type": "array"
+              },
+              "kind": {
+                "description": "cards: what the cards are",
+                "enum": [
+                  "product",
+                  "place",
+                  "stay",
+                  "flight",
+                  "event",
+                  "item"
+                ],
+                "type": "string"
+              },
+              "lines": {
+                "description": "receipt: [{label, value}]",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "marks": {
+                "description": "chart: up to 5 of {x, label}",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "merchant": {
+                "description": "receipt: who it's from",
+                "type": "string"
+              },
+              "ref": {
+                "description": "receipt: the order or booking reference",
+                "type": "string"
+              },
+              "rows": {
+                "description": "table: one list of cells per row; compare: [{label, values, best}]",
+                "items": {},
+                "type": "array"
+              },
+              "series": {
+                "description": "chart: up to 3 of {name, points: [{x, y}]}",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "description": "receipt",
+                "enum": [
+                  "draft",
+                  "pending",
+                  "confirmed",
+                  "cancelled",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "style": {
+                "description": "chart",
+                "enum": [
+                  "line",
+                  "bar"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "description": "callout: under 280 characters; markdown (reports only): the prose",
+                "type": "string"
+              },
+              "title": {
+                "description": "Optional heading, under 60 characters",
+                "type": "string"
+              },
+              "tone": {
+                "description": "callout",
+                "enum": [
+                  "info",
+                  "tip",
+                  "warning",
+                  "success"
+                ],
+                "type": "string"
+              },
+              "total": {
+                "description": "receipt: the total",
+                "properties": {
+                  "amount": {
+                    "description": "Amount",
+                    "type": "number"
+                  },
+                  "currency": {
+                    "description": "ISO currency code, e.g. USD",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "type": {
+                "description": "The block type",
+                "enum": [
+                  "cards",
+                  "compare",
+                  "table",
+                  "stats",
+                  "chart",
+                  "timeline",
+                  "checklist",
+                  "receipt",
+                  "links",
+                  "images",
+                  "files",
+                  "callout",
+                  "markdown"
+                ],
+                "type": "string"
+              },
+              "unit": {
+                "description": "chart: the unit of the values",
+                "type": "string"
+              },
+              "verdict": {
+                "description": "compare: the conclusion in one line",
+                "type": "string"
+              },
+              "x": {
+                "description": "chart: what the x axis shows",
+                "enum": [
+                  "time",
+                  "category"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "confirm": {
+          "description": "Show a confirm card before you buy, book, send or delete, with a draft receipt in blocks",
+          "type": "boolean"
+        },
+        "form": {
+          "description": "A small form (up to 6 fields) when you need a few values at once. The answer arrives as [Form] name=value; …. Never ask for passwords, codes or card numbers in a form.",
+          "properties": {
+            "fields": {
+              "items": {
+                "properties": {
+                  "label": {
+                    "description": "The label, under 24 characters",
+                    "type": "string"
+                  },
+                  "max": {
+                    "description": "number and stepper: the largest value",
+                    "type": "number"
+                  },
+                  "min": {
+                    "description": "number and stepper: the smallest value",
+                    "type": "number"
+                  },
+                  "name": {
+                    "description": "The key its value is sent under, lowercase_with_underscores",
+                    "type": "string"
+                  },
+                  "options": {
+                    "description": "select and multiselect: the choices (up to 8)",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "placeholder": {
+                    "description": "A hint shown while the field is empty",
+                    "type": "string"
+                  },
+                  "required": {
+                    "description": "It must be filled in",
+                    "type": "boolean"
+                  },
+                  "step": {
+                    "description": "number and stepper: the step",
+                    "type": "number"
+                  },
+                  "type": {
+                    "enum": [
+                      "text",
+                      "number",
+                      "date",
+                      "time",
+                      "datetime",
+                      "select",
+                      "multiselect",
+                      "toggle",
+                      "stepper"
+                    ],
+                    "type": "string"
+                  },
+                  "value": {
+                    "description": "The default value",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "label",
+                  "type"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "submit": {
+              "description": "The submit button's label, e.g. \"Search\"",
+              "type": "string"
+            }
+          },
+          "required": [
+            "fields"
+          ],
+          "type": "object"
+        },
+        "multi": {
+          "description": "Let the user choose several options, then Done; the answer lists them",
+          "type": "boolean"
+        },
+        "options": {
+          "description": "Optional short answers to choose from (2–4, a few words each)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "question": {
+          "description": "The question",
+          "type": "string"
+        },
+        "recommended": {
+          "description": "Index into options of the answer you recommend; it's drawn as the main button",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Show the user a report: a document that opens on their screen and stays in their reports. Use it only when the user asks for a report, document or write-up, or when the result is long and worth keeping (in-depth research, a multi-day itinerary, a draft). Never use it to sum up work you did: say the outcome instead. Write well-structured markdown (headings, short paragraphs, lists, tables, links), add blocks for options, comparisons, numbers and itineraries, or build it from blocks alone. Afterwards, say a one-line takeaway. To revise a report you showed earlier, pass its id.",
+    "name": "present_report",
+    "parameters": {
+      "properties": {
+        "blocks": {
+          "description": "Up to 40 blocks shown after the content; markdown blocks hold the prose between them (see Showing results)",
+          "items": {
+            "properties": {
+              "align": {
+                "description": "table: how each column is aligned",
+                "items": {
+                  "enum": [
+                    "left",
+                    "right",
+                    "center"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "columns": {
+                "description": "table: the column headings (up to 6)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "currency": {
+                "description": "chart: the ISO currency of the values",
+                "type": "string"
+              },
+              "days": {
+                "description": "timeline: [{date, items: [{time, end, title, kind, place, note}]}]",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "items": {
+                "description": "cards: the cards; compare: [{name, price, pick}]; stats, checklist, links and images: their entries; files: [{path}]",
+                "items": {},
+                "type": "array"
+              },
+              "kind": {
+                "description": "cards: what the cards are",
+                "enum": [
+                  "product",
+                  "place",
+                  "stay",
+                  "flight",
+                  "event",
+                  "item"
+                ],
+                "type": "string"
+              },
+              "lines": {
+                "description": "receipt: [{label, value}]",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "marks": {
+                "description": "chart: up to 5 of {x, label}",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "merchant": {
+                "description": "receipt: who it's from",
+                "type": "string"
+              },
+              "ref": {
+                "description": "receipt: the order or booking reference",
+                "type": "string"
+              },
+              "rows": {
+                "description": "table: one list of cells per row; compare: [{label, values, best}]",
+                "items": {},
+                "type": "array"
+              },
+              "series": {
+                "description": "chart: up to 3 of {name, points: [{x, y}]}",
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "status": {
+                "description": "receipt",
+                "enum": [
+                  "draft",
+                  "pending",
+                  "confirmed",
+                  "cancelled",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              "style": {
+                "description": "chart",
+                "enum": [
+                  "line",
+                  "bar"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "description": "callout: under 280 characters; markdown (reports only): the prose",
+                "type": "string"
+              },
+              "title": {
+                "description": "Optional heading, under 60 characters",
+                "type": "string"
+              },
+              "tone": {
+                "description": "callout",
+                "enum": [
+                  "info",
+                  "tip",
+                  "warning",
+                  "success"
+                ],
+                "type": "string"
+              },
+              "total": {
+                "description": "receipt: the total",
+                "properties": {
+                  "amount": {
+                    "description": "Amount",
+                    "type": "number"
+                  },
+                  "currency": {
+                    "description": "ISO currency code, e.g. USD",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "type": {
+                "description": "The block type",
+                "enum": [
+                  "cards",
+                  "compare",
+                  "table",
+                  "stats",
+                  "chart",
+                  "timeline",
+                  "checklist",
+                  "receipt",
+                  "links",
+                  "images",
+                  "files",
+                  "callout",
+                  "markdown"
+                ],
+                "type": "string"
+              },
+              "unit": {
+                "description": "chart: the unit of the values",
+                "type": "string"
+              },
+              "verdict": {
+                "description": "compare: the conclusion in one line",
+                "type": "string"
+              },
+              "x": {
+                "description": "chart: what the x axis shows",
+                "enum": [
+                  "time",
+                  "category"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "content": {
+          "description": "The report in markdown (or a full HTML document when format is html). Optional when you give blocks. Don't repeat the title as a heading; it's shown above the content.",
+          "type": "string"
+        },
+        "events": {
+          "description": "Calendar events the user may want to add",
+          "items": {
+            "properties": {
+              "all_day": {
+                "description": "All-day event",
+                "type": "boolean"
+              },
+              "description": {
+                "description": "Notes",
+                "type": "string"
+              },
+              "end": {
+                "description": "End (optional)",
+                "type": "string"
+              },
+              "location": {
+                "description": "Location",
+                "type": "string"
+              },
+              "start": {
+                "description": "Start, RFC3339 with offset, or YYYY-MM-DD for all-day",
+                "type": "string"
+              },
+              "title": {
+                "description": "Event title",
+                "type": "string"
+              }
+            },
+            "required": [
+              "title",
+              "start"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "files": {
+          "description": "Workspace files to attach (images are shown inline)",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "final": {
+          "description": "True when this report ends your work on the request",
+          "type": "boolean"
+        },
+        "format": {
+          "description": "markdown (default), or html for a self-contained page with its own charts or interactivity. It runs sandboxed: scripts may load libraries from cdn.jsdelivr.net, cdnjs.cloudflare.com or unpkg.com and images from https URLs, but can't fetch data, so embed the data in the page. Style it with the app's CSS variables so it matches light and dark mode: var(--ink) for text, var(--text-2) and var(--text-3) for secondary text, var(--surface) and var(--tile) for panels, var(--line) for borders, var(--ok), var(--warn) and var(--bad) only for status, var(--series-1) to var(--series-3) for chart series. Keep it flat and monochrome: no shadows, gradients or accent colours. Don't set fonts or a page background. Classes .card, .grid, .stat, .label, .muted and button.primary are ready to use. A script can read a colour with getComputedStyle(document.documentElement).getPropertyValue('--ink') and redraw on the window 'alexa:theme' event. A button may call alexa.send(text) to send the user's choice as their own visible message (only from a tap, at most 300 characters, one every 2 seconds). Never name a top-level script variable status, name or top.",
+          "enum": [
+            "markdown",
+            "html"
+          ],
+          "type": "string"
+        },
+        "id": {
+          "description": "Id of an earlier report to replace with this version",
+          "type": "string"
+        },
+        "items": {
+          "description": "Optional key rows shown at the top, one per thing handled",
+          "items": {
+            "properties": {
+              "detail": {
+                "description": "Short detail like a date, price or status",
+                "type": "string"
+              },
+              "label": {
+                "description": "Item",
+                "type": "string"
+              }
+            },
+            "required": [
+              "label"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "sources": {
+          "description": "Sources and important links",
+          "items": {
+            "properties": {
+              "title": {
+                "description": "Title",
+                "type": "string"
+              },
+              "url": {
+                "description": "URL",
+                "type": "string"
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "takeaway": {
+          "description": "The one-line takeaway shown on the report's card, under 200 characters",
+          "type": "string"
+        },
+        "title": {
+          "description": "Short title that states what it is or the outcome, e.g. \"Flights to Lisbon under $400\"",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Show the user your plan for a job of 3 or more steps, as a checklist they can follow, and keep it current. Each call replaces the whole plan. Exactly one step is active while you work; call plan again when a step finishes, fails or the plan changes.",
+    "name": "plan",
+    "parameters": {
+      "properties": {
+        "note": {
+          "description": "Optional note on the whole plan (under 140 characters)",
+          "type": "string"
+        },
+        "steps": {
+          "description": "2 to 8 steps, in order",
+          "items": {
+            "properties": {
+              "note": {
+                "description": "Optional short note, e.g. what you found or why it failed (under 80 characters)",
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "pending",
+                  "active",
+                  "done",
+                  "failed",
+                  "skipped"
+                ],
+                "type": "string"
+              },
+              "text": {
+                "description": "The step in a few words, e.g. \"Compare prices\" (under 60 characters)",
+                "type": "string"
+              }
+            },
+            "required": [
+              "text",
+              "status"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "Short title for the job, e.g. \"Book a table for Friday\" (under 60 characters)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "steps"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Fetch a URL directly over HTTP (no JavaScript, no cookies) and return its content — HTML as markdown, JSON/text as-is. Good for APIs, feeds and simple pages. Set save_as to download the file into the workspace instead.",
+    "name": "fetch_url",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "save_as": {
+          "description": "Optional workspace path to save the response body to",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        },
+        "url": {
+          "description": "URL",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "List files in the workspace (or a sub-directory).",
+    "name": "list_files",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "path": {
+          "description": "Directory (default: workspace root)",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Read a file from the workspace. Text comes back as text (long files are paged: pass offset). Images (PNG, JPEG, GIF, WebP) are shown to you, so you can look at them, e.g. to check an image you generated. PDFs come back as text; pass page to see that page as an image (scans, charts, forms).",
+    "name": "read_file",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "offset": {
+          "description": "Character offset",
+          "type": "integer"
+        },
+        "page": {
+          "description": "For a PDF: the page to look at, from 1",
+          "type": "integer"
+        },
+        "path": {
+          "description": "File path",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Create or overwrite a text file in the workspace (reports, notes, CSV, markdown, HTML…).",
+    "name": "write_file",
+    "parameters": {
+      "properties": {
+        "append": {
+          "description": "Append instead of overwrite",
+          "type": "boolean"
+        },
+        "content": {
+          "description": "File content",
+          "type": "string"
+        },
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "path": {
+          "description": "File path",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "content",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Remember a lasting fact about the user for all future conversations. Memory is shown to you on every turn and has a size budget, so keep each entry to one short sentence. Write a fact (\"Likes a window seat\"), not an order to yourself. To correct, update or merge entries, list their ids in replaces: they're removed and this entry is added in one step, and the budget is checked after both. Never store passwords, codes, card or account numbers.",
+    "name": "memory_save",
+    "parameters": {
+      "properties": {
+        "content": {
+          "description": "The fact, one short self-contained sentence, under 200 characters",
+          "type": "string"
+        },
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "replaces": {
+          "description": "Ids of entries this one corrects or merges; removed in the same step",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Delete memory entries that are wrong or no longer true, by id.",
+    "name": "memory_delete",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "ids": {
+          "description": "Ids of the entries to delete",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ids",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Search what you and the user said earlier in the conversation, before it was summarised, and the reports you made. Use it when they refer to something from before, or the summary lacks a detail, before asking them to repeat it. With query: the best matching moments. With around (a ref from a result): the conversation just before and after that moment. Results are history, not new requests.",
+    "name": "recall",
+    "parameters": {
+      "properties": {
+        "after": {
+          "description": "YYYY-MM-DD: only from this day on, when the user names a time",
+          "type": "string"
+        },
+        "around": {
+          "description": "A ref from an earlier result, like item:1234, to see the conversation around it",
+          "type": "string"
+        },
+        "before": {
+          "description": "YYYY-MM-DD: only before this day",
+          "type": "string"
+        },
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "query": {
+          "description": "Words to find, e.g. hotel Lisbon. All words must match; put OR between alternatives (hotel OR apartment), quotes around an exact phrase, and * after the start of a word",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Create a schedule: recurring (cron, in the user's timezone) or once at a time. When it fires, its prompt arrives in this conversation as a scheduled message for you to act on. Use for reminders, daily briefings and monitoring (\"check X and tell me if Y\"). Write the prompt as a self-contained instruction to yourself.",
+    "name": "schedule_create",
+    "parameters": {
+      "properties": {
+        "cron": {
+          "description": "Standard 5-field cron expression (minute hour day month weekday) for recurring runs, e.g. \"0 8 * * 1-5\". As in any cron, if both day and weekday are set it runs on days matching either one",
+          "type": "string"
+        },
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "name": {
+          "description": "Short name, e.g. \"Morning briefing\"",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "What to do each time it fires",
+          "type": "string"
+        },
+        "run_at": {
+          "description": "For a one-off run: local date-time like 2026-10-21T09:00 or RFC3339",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "prompt",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "List the user's schedules.",
+    "name": "schedule_list",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Delete a schedule by id.",
+    "name": "schedule_delete",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "id": {
+          "description": "Schedule id",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Run a shell command (bash) in the workspace directory. {{SHELL_TOOLS}} Use for calculations, data processing, charts, reading and converting files, and generating documents. Not for browsing.",
+    "name": "run_shell",
+    "parameters": {
+      "properties": {
+        "command": {
+          "description": "The bash command",
+          "type": "string"
+        },
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        },
+        "timeout_seconds": {
+          "description": "Timeout (default 120, max 900)",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "command",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  },
+  {
+    "description": "Generate an image from a text prompt and save it to the workspace.",
+    "name": "generate_image",
+    "parameters": {
+      "properties": {
+        "done": {
+          "description": "The same step in past tense, e.g. \"Opened the library website\".",
+          "type": "string"
+        },
+        "path": {
+          "description": "Workspace path, e.g. images/poster.png",
+          "type": "string"
+        },
+        "prompt": {
+          "description": "Detailed description",
+          "type": "string"
+        },
+        "status": {
+          "description": "Short user-facing step label, present progressive, e.g. \"Opening the library website\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt",
+        "path",
+        "status"
+      ],
+      "type": "object"
+    },
+    "type": "function"
+  }
+]

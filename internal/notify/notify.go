@@ -99,6 +99,15 @@ func (n *Notifier) push(userID int64, ref, title, body string) {
 	}
 }
 
+// The email provider gets mailTimeout to take a message: Notify waits for
+// it, and the caller (a run's notify tool, the scheduler) with it.
+var (
+	mailClient = &http.Client{Timeout: mailTimeout}
+	mailURL    = "https://api.resend.com/emails"
+)
+
+const mailTimeout = 30 * time.Second
+
 func (n *Notifier) sendEmail(ctx context.Context, to, subject, body, ref string) error {
 	text := body
 	if n.publicURL != "" {
@@ -110,10 +119,10 @@ func (n *Notifier) sendEmail(ctx context.Context, to, subject, body, ref string)
 		"subject": subject,
 		"text":    text,
 	})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.resend.com/emails", bytes.NewReader(payload))
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, mailURL, bytes.NewReader(payload))
 	req.Header.Set("Authorization", "Bearer "+n.resendKey)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := mailClient.Do(req)
 	if err != nil {
 		return err
 	}

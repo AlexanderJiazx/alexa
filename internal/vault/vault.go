@@ -208,6 +208,14 @@ func (v *Vault) Hold(userID int64, site, username, password string) error {
 	return nil
 }
 
+// Forget drops the logins held for a user who is being deleted. (Their
+// saved ones go with their rows.)
+func (v *Vault) Forget(userID int64) {
+	v.mu.Lock()
+	delete(v.held, userID)
+	v.mu.Unlock()
+}
+
 // live returns the user's held logins that haven't expired yet. v.mu is
 // held.
 func (v *Vault) live(userID int64) []Login {

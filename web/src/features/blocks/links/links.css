@@ -1,0 +1,28 @@
+/* Links and files (WP-04): rows on one surface, each a single link. */
+
+.b-rows { list-style: none; margin: 0; padding: 0; }
+.b-rows > li + li { border-top: 1px solid var(--line); }
+.b-row { min-height: 56px; display: flex; align-items: center; gap: var(--s3); padding: var(--s2) var(--s4); color: var(--ink); text-decoration: none; transition: background-color var(--d-1); }
+@media (hover: hover) {
+  .b-row:hover { background: var(--hover); }
+}
+.b-row:active { background: var(--press); }
+.b-row:focus-visible { outline-offset: -2px; border-radius: var(--r-md); }
+.b-row > svg.i { flex: none; color: var(--text-3); transition: color var(--d-1), transform var(--d-2) var(--ease-out); }
+@media (hover: hover) {
+  .b-row:hover > svg.i { color: var(--ink); }
+}
+.b-row-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.b-row-t b { font: 500 var(--t-body) var(--font); letter-spacing: var(--tr-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-row-t > span { display: flex; min-width: 0; font: 400 var(--t-small) var(--font); color: var(--text-3); overflow: hidden; white-space: nowrap; }
+.b-row-t > span > * { flex: none; }
+/* The note gives way first; the dot before it is part of it. */
+.b-row-t > span > .b-dot { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.b-row-t > span > .b-dot:not(:first-child)::before { margin: 0 var(--s2); }
+
+/* A file’s tile: a picture or a page glyph. */
+.b-ftile { flex: none; width: 32px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: var(--r-xs); background: var(--tile); border: 1px solid var(--line); color: var(--text-2); }
+
+@container blocks (max-width: 379px) {
+  .b-row { padding: var(--s2) var(--s3); }
+}

@@ -33,7 +33,7 @@ func requestLoginTool() *tool {
 	return &tool{
 		Name: "request_login",
 		Description: "Ask the user to sign in to a site through a secure form on their screen: they type their username and password there, and can save them so you can sign in by yourself next time (for example when the session expires). You never see the password. " +
-			"When they've entered it, call browser_login to fill in the sign-in form. Use this when browser_login says there's no saved login for the site, or the saved one was rejected.",
+			"When they've entered it, call browser_login to fill in the sign-in form. Use this when browser_login says there's no saved login for the site, or the saved one was rejected. Calls after this one in the same turn don't run; call them again after the user answers.",
 		Params: map[string]any{
 			"reason": p("string", "Short note shown above the form, e.g. \"Your Amazon session expired\""),
 			"site":   p("string", "The site to sign in to, when it isn't the one open in the browser (e.g. the sign-in form is in a frame from another site)"),
@@ -147,6 +147,13 @@ func (rt *Runtime) SignIn(ctx context.Context, u *store.User, username, password
 	if nd == nil || nd.Kind != "login" {
 		return ErrNotWaiting
 	}
+	// The run that fills the login in needs the user's folders: if they
+	// can't be had, the request stays open to answer again, rather than
+	// answered with nothing to act on it (BH-10).
+	env, err := rt.envs.Ensure(u.ID)
+	if err != nil {
+		return err
+	}
 	kept := "saved it for next time"
 	if save {
 		if _, err := rt.vault.Save(ctx, u.ID, nd.Site, username, password); err != nil {
@@ -161,10 +168,6 @@ func (rt *Runtime) SignIn(ctx context.Context, u *store.User, username, password
 	_ = rt.addEntry(ctx, &store.Entry{UserID: u.ID, Kind: "step", Text: "You entered your login for " + nd.Site, Status: "done"})
 	answer := fmt.Sprintf("The user entered their login for %s in the secure form (username %s) and %s. Call browser_login to fill in the sign-in form.", nd.Site, username, kept)
 	if err := rt.resolveNeeds(ctx, u.ID, nd, stamp(userLoc(u), "", answer), nil); err != nil {
-		return err
-	}
-	env, err := rt.envs.Ensure(u.ID)
-	if err != nil {
 		return err
 	}
 	rt.launch(u, env, false, false)

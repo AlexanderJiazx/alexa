@@ -3,6 +3,7 @@ package browser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -25,16 +26,17 @@ import (
 
 // frameCtx is a cross-origin frame we've attached to.
 type frameCtx struct {
-	id  target.ID
-	ctx context.Context
+	id     target.ID
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // maxFrames bounds how many frames one page attaches to.
 const maxFrames = 24
 
-// frame returns a context attached to a cross-origin frame of page p. The
-// context lives as long as the page: cancelling chromedp's context for a
-// frame closes its target, which takes the page down with it.
+// frame returns a context attached to a cross-origin frame of page p. It
+// lives until the page closes or the frame goes (crossFrames), when it's
+// released.
 func (t *Tab) frame(p *pageCtx, id target.ID) *frameCtx {
 	t.mu.Lock()
 	if f := p.frames[id]; f != nil {
@@ -46,8 +48,21 @@ func (t *Tab) frame(p *pageCtx, id target.ID) *frameCtx {
 	if full {
 		return nil
 	}
-	ctx, _ := chromedp.NewContext(p.ctx, chromedp.WithTargetID(id))
-	if err := runWithTimeout(ctx, 10*time.Second); err != nil {
+	ctx, cancel := chromedp.NewContext(p.ctx, chromedp.WithTargetID(id))
+	done := make(chan error, 1)
+	go func() { done <- chromedp.Run(ctx) }()
+	var err error
+	select {
+	case err = <-done:
+		if err != nil {
+			go release(ctx, cancel)
+		}
+	case <-time.After(10 * time.Second):
+		err = errors.New("timed out after 10s")
+		// Released once the attach gives up, or when the page closes.
+		go func() { <-done; release(ctx, cancel) }()
+	}
+	if err != nil {
 		slog.Debug("attach frame failed", "target", id, "err", err)
 		return nil
 	}
@@ -57,7 +72,7 @@ func (t *Tab) frame(p *pageCtx, id target.ID) *frameCtx {
 			t.onDialog(ctx, e)
 		}
 	})
-	f := &frameCtx{id: id, ctx: ctx}
+	f := &frameCtx{id: id, ctx: ctx, cancel: cancel}
 	t.mu.Lock()
 	if p.frames == nil {
 		p.frames = map[target.ID]*frameCtx{}
@@ -71,7 +86,13 @@ func (t *Tab) frame(p *pageCtx, id target.ID) *frameCtx {
 // read) listed in window[list], keyed by their position in that list.
 func (t *Tab) crossFrames(p *pageCtx, list string, n int) map[int]*frameCtx {
 	if n == 0 {
-		return nil
+		// Nothing to attach to, but frames kept from before may be gone.
+		t.mu.Lock()
+		kept := len(p.frames)
+		t.mu.Unlock()
+		if kept == 0 {
+			return nil
+		}
 	}
 	ctx, cancel := context.WithTimeout(p.ctx, 10*time.Second)
 	defer cancel()
@@ -90,6 +111,9 @@ func (t *Tab) crossFrames(p *pageCtx, list string, n int) map[int]*frameCtx {
 			continue
 		}
 		live[in.TargetID] = true
+		if n == 0 {
+			continue
+		}
 		k := -1
 		// The frame's owner element is in this page only if it's ours.
 		err := chromedp.Run(ctx, chromedp.ActionFunc(func(c context.Context) error {
@@ -118,15 +142,36 @@ func (t *Tab) crossFrames(p *pageCtx, list string, n int) map[int]*frameCtx {
 			out[k] = f
 		}
 	}
-	// Forget frames that are gone (their contexts end with the page).
+	// Forget frames that are gone, and let go of what chromedp keeps for
+	// them; otherwise it stays until the page closes, each frame an ad or
+	// a widget ever showed.
+	var gone []*frameCtx
 	t.mu.Lock()
-	for id := range p.frames {
+	for id, f := range p.frames {
 		if !live[id] {
 			delete(p.frames, id)
+			gone = append(gone, f)
 		}
 	}
 	t.mu.Unlock()
+	for _, f := range gone {
+		go release(f.ctx, f.cancel)
+	}
 	return out
+}
+
+// release ends our attachment to a frame: chromedp detaches its session
+// and the goroutines it runs for it end. Cancelling chromedp's context
+// alone would also close the frame's target, which takes the page down
+// with it if the frame is still there (or its id came back), so the
+// target id is unset first: chromedp closes only a target whose id it
+// has, and reads it only once the context is cancelled. It waits for the
+// detach, so it's called off the caller's path.
+func release(ctx context.Context, cancel context.CancelFunc) {
+	if c := chromedp.FromContext(ctx); c != nil && c.Target != nil {
+		c.Target.TargetID = ""
+	}
+	cancel()
 }
 
 // evalIn evaluates JS in a frame (retrying across navigations).
@@ -171,7 +216,10 @@ func (t *Tab) indexFrames(p *pageCtx, ix *indexResult, refs []elemRef) []elemRef
 			"clip": map[string]float64{"l": fb.Clip.L - fb.X, "t": fb.Clip.T - fb.Y, "r": fb.Clip.R - fb.X, "b": fb.Clip.B - fb.Y}}
 		o, _ := json.Marshal(opts)
 		var fr indexResult
-		if err := evalIn(f.ctx, fmt.Sprintf("(%s)(%s)", indexFn, o), &fr); err != nil {
+		fctx, done := t.withBound(f.ctx)
+		err := evalIn(fctx, fmt.Sprintf("(%s)(%s)", indexFn, o), &fr)
+		done()
+		if err != nil {
 			slog.Debug("index frame failed", "frame", f.id, "err", err)
 			continue
 		}

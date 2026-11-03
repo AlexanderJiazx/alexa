@@ -1,0 +1,38 @@
+/* Tables and comparison grids (WP-04): a header row in small caps-free
+   micro type, hairline rows, numbers right-aligned in tabular figures.
+   A wide grid scrolls sideways inside its frame; its first column stays. */
+
+.b-scroll-x { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
+.b-grid { width: 100%; border-collapse: separate; border-spacing: 0; font: 400 var(--t-small) var(--font); color: var(--ink); }
+.b-grid th, .b-grid td { padding: var(--s3); text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); background-color: var(--surface); overflow-wrap: break-word; }
+.b-grid th:first-child, .b-grid td:first-child { padding-left: var(--s4); }
+.b-grid th:last-child, .b-grid td:last-child { padding-right: var(--s4); }
+.b-grid thead th { padding-top: var(--s3); padding-bottom: var(--s2); font: 500 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); white-space: nowrap; vertical-align: bottom; border-bottom-color: var(--line-strong); }
+.b-grid tbody th { font-weight: 500; }
+.b-grid tbody tr:last-child > * { border-bottom: 0; }
+@media (hover: hover) {
+  .b-grid tbody tr:hover > * { background-image: linear-gradient(var(--hover), var(--hover)); }
+}
+.b-grid .num, .b-grid .a-right { font-variant-numeric: tabular-nums; }
+.b-grid .a-right { text-align: right; }
+.b-grid .a-center { text-align: center; }
+.b-grid td.num { white-space: nowrap; }
+
+/* A table with many columns keeps its first one in view. */
+.b-table .b-grid tr > :first-child { position: sticky; left: 0; z-index: 1; }
+.b-table .b-grid th, .b-table .b-grid td { min-width: 88px; }
+
+/* Show all grows the table where it is. */
+.b-more { width: 100%; height: 40px; display: flex; align-items: center; justify-content: center; gap: var(--s1); border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--text-2); font: 500 var(--t-small) var(--font); cursor: pointer; transition: background-color var(--d-1), color var(--d-1); }
+@media (hover: hover) {
+  .b-more:hover { background: var(--hover); color: var(--ink); }
+}
+.b-more:focus-visible { outline-offset: -2px; }
+.b-more svg.i { transition: transform var(--d-2) var(--ease-out); }
+.b-more[aria-expanded=true] svg.i { transform: rotate(180deg); }
+
+@container blocks (max-width: 379px) {
+  .b-grid th, .b-grid td { padding: var(--s2) var(--s3); }
+  .b-grid th:first-child, .b-grid td:first-child { padding-left: var(--s3); }
+  .b-grid th:last-child, .b-grid td:last-child { padding-right: var(--s3); }
+}

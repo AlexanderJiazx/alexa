@@ -5,7 +5,8 @@
 export type Theme = 'system' | 'light' | 'dark'
 
 const key = 'alexa-theme'
-const dark = matchMedia('(prefers-color-scheme: dark)')
+// Guarded so the module imports where there's no matchMedia (tests).
+const dark = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: dark)') : null
 
 export function getTheme(): Theme {
   try {
@@ -28,14 +29,15 @@ export function setTheme(t: Theme) {
 }
 
 // applyTheme sets the page's theme and the browser's toolbar colour to
-// match.
+// match. The toolbar takes the page's own background, read back once the
+// theme applies, so the colour lives only in the tokens.
 export function applyTheme() {
   const t = getTheme()
   const root = document.documentElement
   if (t === 'system') delete root.dataset.theme
   else root.dataset.theme = t
-  const isDark = t === 'dark' || (t === 'system' && dark.matches)
-  document.querySelector('meta[name=theme-color]')?.setAttribute('content', isDark ? '#121211' : '#F6F6F4')
+  const bg = document.body ? getComputedStyle(document.body).backgroundColor : ''
+  if (bg) document.querySelector('meta[name=theme-color]')?.setAttribute('content', bg)
 }
 
-dark.addEventListener('change', applyTheme)
+dark?.addEventListener('change', applyTheme)

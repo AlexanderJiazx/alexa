@@ -1,0 +1,245 @@
+/* Design tokens (v3, "Ink"). Every colour in the app comes from this file;
+   nothing else may write a hex or rgba value.
+
+   The language is ink on warm paper: monochrome and flat. There is no accent
+   colour and no elevation. Things separate by a surface step and a 1px
+   line, never by a shadow. Status colours (ok, warn, bad) are functional and
+   only say a state (web/DESIGN.md).
+
+   Colours follow the system's light or dark appearance through light-dark();
+   Settings can pin one with data-theme on <html> (src/lib/theme.ts), which
+   sets color-scheme. Browsers without light-dark() (Safari before 17.5) get
+   the same values from the @supports block at the end (FE-16); tokens.test.ts
+   checks that the two stay in step. */
+
+:root {
+  color-scheme: light dark;
+
+  /* Surfaces: the page, and the one surface everything on it uses (cards,
+     the composer, sheets, menus, dialogs, fields and buttons). tile is the
+     neutral fill for small things: pills, image tiles, code, tracks and
+     loading placeholders. */
+  --bg: light-dark(#F6F6F4, #121211);
+  --surface: light-dark(#FFFFFF, #1B1B1A);
+  --tile: light-dark(#F0F0ED, #242422);
+
+  /* Lines: a hairline between things, a control's frame, and the frame of
+     a control you're pointing at or typing in. */
+  --line: light-dark(#E4E4E0, #2B2B29);
+  --line-strong: light-dark(#DCDCD7, #383835);
+  --focus-line: light-dark(#BDBDB7, #57574F);
+
+  /* Text, in four tiers. text-2 and text-3 meet 4.5:1 on every surface;
+     text-4 is for decoration and a control's edge only (3:1). */
+  --ink: light-dark(#111111, #EDEDEA);
+  --ink-2: light-dark(#2A2A27, #D9D9D4);
+  --text-2: light-dark(#5F5F59, #A5A59D);
+  --text-3: light-dark(#696963, #8E8E87);
+  --text-4: light-dark(#8C8C85, #6F6F69);
+  --on-ink: light-dark(#FFFFFF, #121211);
+  --ink-hover: light-dark(#2A2A2A, #FFFFFF);
+
+  /* Status: a foreground for text and icons, and a quiet background. Only
+     for a state (done, careful, failed), never decoration. */
+  --ok: light-dark(#1E7B52, #5BC491);
+  --ok-bg: light-dark(#E8F3EC, #16271E);
+  --warn: light-dark(#8A5A00, #E5B45A);
+  --warn-bg: light-dark(#FBF1DC, #2A2213);
+  --bad: light-dark(#B3261E, #F28B82);
+  --bad-bg: light-dark(#FBEAE8, #2C1715);
+
+  /* Data series for charts and bars: ink and two greys. */
+  --series-1: var(--ink);
+  --series-2: light-dark(#8A8A83, #8E8E87);
+  --series-3: light-dark(#C4C4BE, #55554F);
+
+  /* States and the modal backdrop. */
+  --hover: light-dark(rgba(17,17,17,.05), rgba(255,255,255,.07));
+  --press: light-dark(rgba(17,17,17,.08), rgba(255,255,255,.10));
+  --select: light-dark(rgba(17,17,17,.12), rgba(255,255,255,.16));
+  --scrim: light-dark(rgba(17,17,17,.12), rgba(0,0,0,.5));
+  --track: light-dark(#DCDCD7, #383835);
+  --knob: light-dark(#FFFFFF, #CFCFCA);
+
+  /* A web page is white whatever the app's theme: the live browser and
+     sandboxed HTML reports sit on it, and Alexa's pointer is drawn on it in
+     ink with a white edge. */
+  --canvas: #FFFFFF;
+  --canvas-text: #6E6E68;
+  --pointer: #111111;
+  --pointer-stroke: #FFFFFF;
+
+  /* Focus: keyboard focus is a 2px ink outline. */
+  --focus: var(--ink);
+
+  /* Type. Use as `font: 500 var(--t-small) var(--font)` with the matching
+     tracking. Seven sizes; display is Instrument Serif. */
+  --font: 'Instrument Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Instrument Serif', ui-serif, Georgia, 'Times New Roman', serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --t-micro: 12px/16px;
+  --t-small: 13px/18px;
+  --t-body: 15px/22px;
+  --t-read: 17px/26px;
+  --t-title: 20px/28px;
+  --t-head: 28px/34px;
+  --t-display: 44px/48px;
+  --tr-micro: .01em;
+  --tr-body: -.003em;
+  --tr-read: -.006em;
+  --tr-title: -.012em;
+  --tr-head: -.02em;
+  --tr-display: -.015em;
+  --tr-caps: .06em;
+
+  /* Spacing, on a 4px grid. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s8: 32px;
+  --s10: 40px;
+  --s14: 56px;
+
+  /* Radii. Nested corners follow inner = outer - padding. */
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-xl: 28px;
+  --r-full: 999px;
+
+  /* Motion. Enter with ease-out, move and morph with ease-in-out, settle
+     panels and sheets with the spring. Exits take about 0.6x the enter. */
+  --ease-out: cubic-bezier(.22,.9,.24,1);
+  --ease-in-out: cubic-bezier(.65,0,.35,1);
+  --spring: linear(0, .22 8%, .6 18%, .88 30%, 1.01 44%, 1.03 54%, 1.005 72%, 1);
+  --d-1: 120ms;
+  --d-2: 200ms;
+  --d-3: 320ms;
+  --d-4: 480ms;
+  --stagger: 60ms;
+
+  /* Layout shared across the app. */
+  --header-h: 52px;
+  --gutter: 16px;
+  --measure: 640px;
+
+  /* Stacking. */
+  --z-composer: 10;
+  --z-header: 20;
+  --z-page: 25;
+  --z-scrim: 30;
+  --z-menu: 40;
+  --z-sheet: 50;
+  --z-toast: 60;
+}
+
+:root[data-theme=light] { color-scheme: light; }
+:root[data-theme=dark] { color-scheme: dark; }
+
+/* Phones: a shorter header, and display and reading sizes a step down. */
+@media (max-width: 640px) {
+  :root {
+    --header-h: 48px;
+    --t-read: 16px/26px;
+    --t-display: 36px/40px;
+  }
+}
+
+/* FE-16: browsers without light-dark() get the same colours from here, for
+   the system theme and for a theme pinned in Settings. Keep in step with the
+   light-dark() pairs above (tokens.test.ts checks it). */
+@supports not (color: light-dark(#000, #fff)) {
+  :root {
+    --bg: #F6F6F4;
+    --surface: #FFFFFF;
+    --tile: #F0F0ED;
+    --line: #E4E4E0;
+    --line-strong: #DCDCD7;
+    --focus-line: #BDBDB7;
+    --ink: #111111;
+    --ink-2: #2A2A27;
+    --text-2: #5F5F59;
+    --text-3: #696963;
+    --text-4: #8C8C85;
+    --on-ink: #FFFFFF;
+    --ink-hover: #2A2A2A;
+    --ok: #1E7B52;
+    --ok-bg: #E8F3EC;
+    --warn: #8A5A00;
+    --warn-bg: #FBF1DC;
+    --bad: #B3261E;
+    --bad-bg: #FBEAE8;
+    --series-2: #8A8A83;
+    --series-3: #C4C4BE;
+    --hover: rgba(17,17,17,.05);
+    --press: rgba(17,17,17,.08);
+    --select: rgba(17,17,17,.12);
+    --scrim: rgba(17,17,17,.12);
+    --track: #DCDCD7;
+    --knob: #FFFFFF;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme=light]) {
+      --bg: #121211;
+      --surface: #1B1B1A;
+      --tile: #242422;
+      --line: #2B2B29;
+      --line-strong: #383835;
+      --focus-line: #57574F;
+      --ink: #EDEDEA;
+      --ink-2: #D9D9D4;
+      --text-2: #A5A59D;
+      --text-3: #8E8E87;
+      --text-4: #6F6F69;
+      --on-ink: #121211;
+      --ink-hover: #FFFFFF;
+      --ok: #5BC491;
+      --ok-bg: #16271E;
+      --warn: #E5B45A;
+      --warn-bg: #2A2213;
+      --bad: #F28B82;
+      --bad-bg: #2C1715;
+      --series-2: #8E8E87;
+      --series-3: #55554F;
+      --hover: rgba(255,255,255,.07);
+      --press: rgba(255,255,255,.10);
+      --select: rgba(255,255,255,.16);
+      --scrim: rgba(0,0,0,.5);
+      --track: #383835;
+      --knob: #CFCFCA;
+    }
+  }
+  :root[data-theme=dark] {
+    --bg: #121211;
+    --surface: #1B1B1A;
+    --tile: #242422;
+    --line: #2B2B29;
+    --line-strong: #383835;
+    --focus-line: #57574F;
+    --ink: #EDEDEA;
+    --ink-2: #D9D9D4;
+    --text-2: #A5A59D;
+    --text-3: #8E8E87;
+    --text-4: #6F6F69;
+    --on-ink: #121211;
+    --ink-hover: #FFFFFF;
+    --ok: #5BC491;
+    --ok-bg: #16271E;
+    --warn: #E5B45A;
+    --warn-bg: #2A2213;
+    --bad: #F28B82;
+    --bad-bg: #2C1715;
+    --series-2: #8E8E87;
+    --series-3: #55554F;
+    --hover: rgba(255,255,255,.07);
+    --press: rgba(255,255,255,.10);
+    --select: rgba(255,255,255,.16);
+    --scrim: rgba(0,0,0,.5);
+    --track: #383835;
+    --knob: #CFCFCA;
+  }
+}

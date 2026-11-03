@@ -1,0 +1,12 @@
+/* Callout (WP-04): a quiet wash and a glyph; no border, no shadow. */
+
+.b-callout { display: flex; align-items: flex-start; gap: var(--s3); padding: var(--s3) var(--s4); border-radius: var(--r-md); background: var(--tile); color: var(--ink-2); }
+.b-callout > svg.i { flex: none; margin-top: 2px; color: var(--text-2); }
+.b-callout-t { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.b-callout-t b { font: 600 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--ink); }
+.b-callout-t p { font: 400 var(--t-body) var(--font); letter-spacing: var(--tr-body); text-wrap: pretty; overflow-wrap: anywhere; }
+.b-callout.t-info > svg.i { color: var(--text-2); }
+.b-callout.t-warning { background: var(--warn-bg); }
+.b-callout.t-warning > svg.i { color: var(--warn); }
+.b-callout.t-success { background: var(--ok-bg); }
+.b-callout.t-success > svg.i { color: var(--ok); }

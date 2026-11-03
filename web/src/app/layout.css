@@ -1,0 +1,287 @@
+/* The stage layout (WP-07): the header, the exchange column, the panel slot
+   (beside the column from 900px, a bottom sheet under it), where
+   the composer sits (docked, under the column beside a panel, or in the
+   home board), and the exchange's messages.
+
+   Geometry lives in a few variables on .app so the column, the composer,
+   the sheet and the toasts line up by construction:
+   - col-max: the exchange column (and the composer) when there's no panel;
+   - col-w: the exchange column beside a panel, where the composer docks
+     (narrower on a small laptop, so the panel keeps room to be read);
+   - side: the space at either side of the column and the composer, the
+     gutter or a notch's safe area, whichever is more;
+   - composer-h and composer-bottom: the composer's height and offset (the
+     composer sets composer-h as its text grows);
+   - dock-h: the band the composer takes at the bottom, with a gap above;
+   - sheet-top and sheet-peek: where the sheet ends at its full height, and
+     how much of it shows at the peek. */
+
+.app {
+  --col-max: 680px;
+  --col-w: clamp(320px, 34vw, 400px);
+  --side: max(var(--gutter), env(safe-area-inset-left), env(safe-area-inset-right));
+  --composer-h: 56px;
+  --composer-bottom: var(--s6);
+  --stage-x: var(--gutter);
+  --dock-h: calc(var(--composer-bottom) + var(--composer-h) + var(--s3));
+  --sheet-top: calc(var(--header-h) + env(safe-area-inset-top) + var(--s2));
+  --sheet-peek: calc(96px + var(--dock-h));
+  position: relative;
+  /* Never taller than the screen, however short it is (a phone on its
+     side, a 200% zoom): the composer stays in view without scrolling. */
+  height: 100dvh;
+  /* clip, not just hidden: nothing (focus, find-in-page) may scroll the
+     frame sideways. */
+  overflow: hidden;
+  overflow: clip;
+  background: var(--bg);
+}
+@media (max-width: 640px) {
+  .app { --composer-bottom: max(var(--s3), env(safe-area-inset-bottom)); --stage-x: var(--s2); }
+}
+
+/* ---------- header ---------- */
+.header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-header);
+  height: calc(var(--header-h) + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) max(var(--gutter), env(safe-area-inset-right)) 0 max(var(--gutter), env(safe-area-inset-left));
+  display: flex;
+  align-items: center;
+}
+.header .end { margin-left: auto; display: flex; align-items: center; gap: var(--s1); }
+/* The centre slot: what Alexa is working on, quiet, never over the buttons. */
+.header-context {
+  position: absolute;
+  left: 50%;
+  top: env(safe-area-inset-top);
+  height: var(--header-h);
+  max-width: calc(100% - 2 * 128px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  font: 500 var(--t-small) var(--font);
+  color: var(--text-3);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--d-2) var(--ease-out);
+}
+.header-context.on { opacity: 1; }
+@media (max-width: 380px) { .header-context { display: none; } }
+/* The mark's button is wider than the dot, so the dot lines up with the
+   gutter. */
+.mark-btn { width: 44px; height: 44px; margin-left: -16px; padding: 0; border: 0; border-radius: var(--r-full); background: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.mark-btn .mark { transition: transform var(--d-2) var(--spring); }
+@media (hover: hover) {
+  .mark-btn:hover .mark:not(.busy) { transform: scale(1.2); }
+}
+.mark-btn:active .mark { transform: scale(.97); }
+.avatar-btn { position: relative; width: 44px; height: 44px; margin-right: -7px; padding: 0; border: 0; border-radius: var(--r-full); background: transparent; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--tile); border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; font: 600 var(--t-small) var(--font); color: var(--text-2); transition: border-color var(--d-1), color var(--d-1); }
+.avatar-btn[aria-expanded=true] .avatar { border-color: var(--focus-line); color: var(--ink); }
+@media (hover: hover) {
+  .avatar-btn:hover .avatar { border-color: var(--focus-line); color: var(--ink); }
+}
+.badge { position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--ink); outline: 2px solid var(--bg); }
+
+/* ---------- the stage ---------- */
+.stage {
+  position: absolute;
+  top: calc(var(--header-h) + env(safe-area-inset-top));
+  left: 0;
+  right: 0;
+  bottom: calc(var(--composer-bottom) + var(--composer-h) + var(--s4));
+  display: flex;
+  padding: 0 max(var(--stage-x), env(safe-area-inset-right)) 0 max(var(--stage-x), env(safe-area-inset-left));
+}
+.app.voice .stage { bottom: calc(var(--composer-bottom) + 208px); }
+/* Into and out of voice the stage eases to its new height with the bar's
+   morph; nothing else animates its size (the column moves by transform,
+   Stage.tsx). */
+.stage.morph { transition: bottom var(--d-4) var(--ease-in-out); }
+
+/* The exchange column. Messages sit at the bottom, by the composer; its
+   head (the RunCard, a background job) stays at the top. */
+.log { flex: 0 0 100%; min-width: 0; overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none; }
+.log-inner { max-width: var(--col-max); min-height: 100%; margin: 0 auto; display: flex; flex-direction: column; justify-content: flex-end; gap: var(--s4); padding: var(--s2) 0 var(--s1); }
+/* The header has no background, so what scrolls up fades out under it
+   rather than being cut in half, as on the home board and in Reflect. The
+   head (the RunCard), when there is one, fades it itself and isn't faded.
+   The column starts below the fade, so nothing is faded until it scrolls. */
+.log:has(> .log-inner > .log-head:empty) { -webkit-mask-image: linear-gradient(to bottom, transparent 0, black var(--s5)); mask-image: linear-gradient(to bottom, transparent 0, black var(--s5)); }
+.log:has(> .log-inner > .log-head:empty) > .log-inner { padding-top: var(--s5); }
+.log-head { position: sticky; top: 0; z-index: 1; margin-bottom: auto; display: flex; flex-direction: column; gap: var(--s2); padding-bottom: var(--s2); background: linear-gradient(var(--bg) 80%, transparent); }
+.log-head:empty { display: none; }
+/* What was there when the log filled sits still; only arrivals rise in. */
+.log:not(.settled) .msg, .log:not(.settled) .note { animation: none; }
+
+/* The follow pill floats at the foot of the exchange column. */
+.follow-slot { position: absolute; left: max(var(--stage-x), env(safe-area-inset-left)); right: max(var(--stage-x), env(safe-area-inset-right)); bottom: var(--s3); z-index: 2; display: flex; justify-content: center; pointer-events: none; }
+.follow-slot > * { pointer-events: auto; }
+.follow-slot:empty { display: none; }
+/* While it's there, the column's end clears it, so nothing hides under it. */
+.stage:has(.follow-pill) .log-inner { padding-bottom: calc(40px + var(--s3) + var(--s2)); transition: padding-bottom var(--d-2) var(--ease-out); }
+
+/* ---------- the panel slot (900px and wider) ---------- */
+/* The column clips the panel as it opens and closes, and stays above the
+   conversation, which slides under it meanwhile. */
+.panel-col { position: relative; z-index: 1; flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: var(--s3); overflow: hidden; }
+.panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  animation: panelIn var(--d-4) var(--spring) both;
+}
+@keyframes panelIn { from { opacity: 0; transform: translateY(12px) scale(.985) } to { opacity: 1; transform: none } }
+@keyframes panelOut { from { opacity: 1; transform: none } to { opacity: 0; transform: translateY(12px) scale(.985) } }
+.stage.closing .panel { animation: panelOut var(--d-3) var(--ease-in-out) both; }
+.panel-head { height: 52px; flex: none; display: flex; align-items: center; gap: var(--s2); padding: 0 var(--s2) 0 var(--s4); border-bottom: 1px solid var(--line); }
+.panel-ic { width: 20px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--text-2); }
+.panel-head .title { flex: 1; min-width: 0; font: 600 var(--t-body) var(--font); letter-spacing: var(--tr-body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-head .title .sub { margin-left: var(--s2); font: 400 var(--t-small) var(--font); color: var(--text-3); }
+.panel-body { flex: 1; min-height: 0; }
+.panel-body.center { display: flex; align-items: center; justify-content: center; }
+.panel-body.doc { overflow-y: auto; padding: 0 var(--s8) var(--s10); }
+
+@media (min-width: 900px) {
+  /* Beside a panel the exchange is a column on the right. It takes its
+     place at once and slides there by transform (Stage.tsx), so its text
+     wraps once rather than on every frame. */
+  .stage.with-panel:not(.closing) .log, .stage.with-panel:not(.closing) .home { flex-basis: calc(var(--col-w) + var(--s5)); padding-left: var(--s5); }
+  .stage.with-panel:not(.closing) .follow-slot { left: auto; width: var(--col-w); }
+
+  /* The panel keeps its full size, so it's revealed and put away rather
+     than squeezed. Going, it stays where it was, over the stage, while it
+     fades and the column goes back to the middle. */
+  .panel-col > .panel { width: calc(100vw - 2 * var(--side) - var(--col-w) - var(--s5)); }
+  .stage.with-panel.closing .panel-col { position: absolute; top: 0; bottom: 0; left: max(var(--stage-x), env(safe-area-inset-left)); pointer-events: none; }
+
+  /* With a panel open the composer docks under the exchange column, and
+     the panel takes the stage's full height (review-visual 3.1). The
+     column makes room for the composer inside itself, so the panel's edge
+     never moves when the composer comes and goes, and the conversation's
+     last line stays put as the panel goes. */
+  .stage.with-panel { bottom: var(--composer-bottom); }
+  .stage.with-panel .log, .stage.with-panel .home { padding-bottom: calc(var(--composer-h) + var(--s4)); }
+  .stage.with-panel .follow-slot { bottom: calc(var(--composer-h) + var(--s4) + var(--s3)); }
+  .stage.with-panel:not(.closing) ~ .bar.text { --bar-w: var(--col-w); left: calc(100% - var(--side) - var(--col-w)); }
+  .stage.with-panel:not(.closing) ~ .bar.voice { left: calc(100% - var(--side) - var(--col-w) / 2 - 36px); }
+  .stage.with-panel:not(.closing) ~ .voice-side { left: calc(100% - var(--side) - var(--col-w) / 2 - 104px); }
+  .stage.with-panel:not(.closing) ~ .voice-tray { --tray-w: var(--col-w); left: calc(100% - var(--side) - var(--col-w)); }
+  .app.voice .stage.with-panel .log { padding-bottom: 208px; }
+}
+
+/* ---------- the panel sheet (under 900px) ---------- */
+/* The sheet rises over the conversation. Its visible height is --v: the
+   peek, half or all of it; the conversation above it ends where it begins,
+   so the last thing said stays in view at the peek and at half. The
+   composer floats over its bottom band. */
+.psheet {
+  --v: 50%;
+  --c: 50%;
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--sheet-top);
+  bottom: 0;
+  z-index: calc(var(--z-composer) - 1);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  transform: translateY(calc(100% - var(--v)));
+  transition: transform var(--d-3) var(--spring);
+  animation: psheetIn var(--d-4) var(--spring) backwards;
+}
+@keyframes psheetIn { from { transform: translateY(100%) } }
+.psheet.peek { --v: var(--sheet-peek); }
+.psheet.half { --v: 50%; }
+.psheet.full { --v: 100%; }
+.psheet.c-peek { --c: var(--sheet-peek); }
+.psheet.c-half { --c: 50%; }
+.psheet.c-full { --c: 100%; }
+.psheet.dragging { transition: none; }
+.psheet.closing { transform: translateY(100%); transition: transform var(--d-2) var(--ease-in-out); }
+/* Only the part that shows is laid out, so the panel's content ends where
+   the composer begins. */
+.psheet-in { flex: none; height: var(--c); min-height: 0; display: flex; flex-direction: column; }
+.psheet-grab { flex: none; width: 100%; height: var(--s6); padding: var(--s2) 0 0; border: 0; border-radius: var(--r-xl) var(--r-xl) 0 0; background: transparent; display: flex; justify-content: center; cursor: grab; touch-action: none; }
+/* The grabber is the Sheet's (ui.css .sheet::before). */
+.psheet-grab span { width: 36px; height: 5px; border-radius: var(--r-full); background: var(--line-strong); transition: background-color var(--d-1); }
+@media (hover: hover) {
+  .psheet-grab:hover span { background: var(--focus-line); }
+}
+.psheet-grab:focus-visible { outline-offset: -4px; }
+.psheet.dragging .psheet-grab { cursor: grabbing; }
+/* The panel is the sheet: one surface, no frame of its own. */
+.psheet .panel { border: 0; border-radius: 0; background: transparent; animation: none; }
+.psheet .panel-head { touch-action: none; padding-left: var(--s5); }
+.psheet .panel-body.doc { padding: 0 var(--s5) var(--s8); }
+/* At the peek the head and one line under it name what's inside, under
+   the head's title (the head's padding, its icon and their gap). */
+.psheet.c-peek .panel-head { border-bottom-color: transparent; }
+.psheet.c-peek .panel-body { visibility: hidden; }
+.psheet-peek { flex: none; height: 20px; margin: calc(-1 * var(--s2)) 0 0; padding: 0 var(--s5) 0 calc(var(--s5) + 20px + var(--s2)); font: 500 var(--t-small) var(--font); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; animation: pIn var(--d-2) var(--ease-out) both; }
+.psheet-foot { position: relative; flex: none; padding: 0 max(var(--s4), env(safe-area-inset-right)) 0 max(var(--s4), env(safe-area-inset-left)); }
+/* The composer floats over the dock; the panel's content fades out just
+   above it (or above the caption, when there's one) rather than ending on
+   a hard edge. */
+.psheet-dock { position: relative; flex: none; height: var(--dock-h); }
+.psheet-dock::before, .psheet-foot::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: var(--s6); background: linear-gradient(color-mix(in oklab, var(--surface) 0%, transparent), var(--surface)); pointer-events: none; }
+/* A live page is a picture of the page: it ends where it ends. */
+.psheet.c-peek .psheet-dock::before, .psheet.is-browser .psheet-dock::before, .psheet.is-browser .psheet-foot::before, .psheet-foot + .psheet-dock::before { display: none; }
+
+@media (max-width: 899px) {
+  .stage.sheet-peek { bottom: var(--sheet-peek); }
+  .stage.sheet-half, .stage.sheet-full { bottom: calc((100% - var(--sheet-top)) / 2); }
+  .stage[class*='sheet-'] { transition: bottom var(--d-3) var(--spring); }
+  /* At full height the sheet is the screen: the conversation behind it
+     steps out of the sliver above it (the caption carries what's said). */
+  .stage[class*='sheet-'] .log { transition: opacity var(--d-2) var(--ease-out), visibility 0s; }
+  .stage.sheet-full .log { opacity: 0; visibility: hidden; transition: opacity var(--d-2) var(--ease-out), visibility 0s var(--d-2); }
+  .stage:not(.with-panel) .log { animation: pIn var(--d-3) var(--ease-out) both; }
+  .wide-only { display: none; }
+}
+
+/* ---------- the home board's composer ---------- */
+/* With the board on its own, the composer sits in it, under the greeting
+   (the board measures the slot into --home-bar). It's a little taller
+   there, and grows down into the board as the text grows. */
+.stage.home-centred { bottom: var(--composer-bottom); }
+.stage.home-placed ~ .bar.text { top: var(--home-bar); bottom: auto; height: max(64px, var(--composer-h)); }
+/* The board shows what Alexa needs itself. */
+.stage.home-on ~ .needs-dock { display: none; }
+
+@media (max-width: 640px) {
+  .log-inner { padding-inline: var(--s2); }
+  .panel { border-radius: var(--r-md); }
+  .panel-head { padding-left: var(--s3); }
+  .panel-body.doc { padding: 0 var(--s4) var(--s8); }
+}
+
+/* Toasts sit just above the composer, out of the header's way, clear of
+   a notch at either side. */
+.app .toasts { width: min(420px, calc(100% - 2 * var(--side))); }
+.app:has(.bar) .toasts { bottom: calc(var(--composer-bottom) + var(--composer-h) + var(--s3)); }
+
+/* ---------- short screens ---------- */
+/* A phone on its side or a big zoom: the header and the composer give
+   the conversation what room they can. */
+@media (max-height: 500px) {
+  .app { --header-h: 44px; --composer-bottom: max(var(--s2), env(safe-area-inset-bottom)); }
+  .app .home-top { padding-top: var(--s4); }
+}
+

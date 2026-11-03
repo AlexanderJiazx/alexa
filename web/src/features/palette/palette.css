@@ -1,0 +1,57 @@
+/* The command palette (WP-12): a search field over a list of commands, high
+   on the screen so the list has room to grow down. It's a native modal
+   <dialog>, so it floats in the top layer: the surface with a --line frame. */
+
+.palette {
+  position: fixed;
+  top: max(12vh, calc(env(safe-area-inset-top) + var(--s6)));
+  left: 0;
+  right: 0;
+  width: min(560px, calc(100% - 2 * var(--gutter)));
+  max-width: none;
+  /* A fixed height, so it doesn't jump under the cursor as a search
+     narrows the list. */
+  height: min(480px, calc(100dvh - 24vh));
+  margin: 0 auto;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  color: var(--ink);
+  transform-origin: top center;
+  animation: pPop var(--d-2) var(--ease-out) both;
+}
+dialog.palette:not([open]) { display: none; }
+.palette::backdrop { background: var(--scrim); animation: pIn var(--d-2) both; }
+.palette.leaving { animation: pUnpop var(--d-1) var(--ease-in-out) both; }
+.palette.leaving::backdrop { animation: pOut var(--d-1) both; }
+
+.palette-search { flex: none; height: 56px; display: flex; align-items: center; gap: var(--s3); padding: 0 var(--s4); border-bottom: 1px solid var(--line); color: var(--text-3); }
+.palette-search input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: transparent; color: var(--ink); font: 400 var(--t-body) var(--font); letter-spacing: var(--tr-body); }
+.palette-search input:focus { outline: none; }
+
+.palette-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--s2); scroll-padding: var(--s2); }
+.palette-group { padding: var(--s3) var(--s3) var(--s1); font: 600 var(--t-small) var(--font); color: var(--text-2); }
+.palette-group:first-child { padding-top: var(--s1); }
+.palette-item { height: 40px; display: flex; align-items: center; gap: var(--s3); padding: 0 var(--s3); border-radius: var(--r-sm); color: var(--ink); font: 400 var(--t-body) var(--font); letter-spacing: var(--tr-body); cursor: pointer; user-select: none; }
+/* The highlighted command is what Enter runs. Focus stays in the search
+   field, so this is the only cue: a selected wash and, once the arrows are
+   in use, the keyboard's focus outline. */
+.palette-item[aria-selected=true] { background: var(--select); }
+.palette-list.keyed .palette-item[aria-selected=true] { outline: 2px solid var(--focus); outline-offset: -2px; }
+/* Pressing a row is as dark as choosing it, never lighter. */
+.palette-item:active { background: var(--select); }
+.palette-ic { width: 20px; flex: none; display: flex; justify-content: center; color: var(--text-2); }
+.palette-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-empty { padding: var(--s4) var(--s3); text-align: center; font: 400 var(--t-small) var(--font); color: var(--text-3); }
+
+@media (pointer: coarse) {
+  .palette-item { height: 44px; }
+}
+@media (max-width: 640px) {
+  .palette { top: calc(env(safe-area-inset-top) + var(--s3)); height: min(560px, calc(100dvh - 2 * var(--s3) - env(safe-area-inset-top))); }
+  .palette-search input { font-size: 16px; }
+}

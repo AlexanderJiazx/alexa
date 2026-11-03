@@ -1,0 +1,65 @@
+/* The home board (WP-08): one calm centred column. The dot, the greeting
+   and a status line when there's something real to say; the composer's
+   slot; then what Alexa needs from you and what she finished lately, each
+   a small caps heading over what's under it, divided by space. Where the
+   board sits beside a panel is the stage's business (app/layout.css). */
+
+.home { flex: 0 0 100%; min-width: 0; overflow-y: auto; overscroll-behavior: contain; animation: pIn var(--d-3) var(--ease-out) both; }
+.home-in { max-width: var(--col-max); min-height: 100%; margin: 0 auto; display: flex; flex-direction: column; padding-bottom: var(--s10); }
+
+/* The greeting: the dot draws itself in, then the words rise into place. */
+.home-top { flex: none; display: flex; flex-direction: column; align-items: center; gap: var(--s3); padding-top: max(var(--s10), calc(24dvh - var(--s14) - var(--s8))); text-align: center; }
+.home-top .mark { margin-bottom: var(--s3); }
+.greet { margin: 0; font: 400 var(--t-display) var(--font-display); letter-spacing: var(--tr-display); color: var(--ink); text-wrap: balance; animation: pRise var(--d-4) var(--ease-out) 120ms both; }
+/* The status line keeps its line while it has nothing to say, so the
+   composer under it doesn't move when a job starts or ends. Two balanced
+   lines at most: on a phone the offline line wraps rather than losing its
+   end. */
+.home-status { max-width: min(100%, 36em); min-height: 1lh; margin: 0; font: 400 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--text-3); text-wrap: balance; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; animation: pRise var(--d-4) var(--ease-out) 180ms both; }
+
+/* Where the composer sits while the board has the screen to itself. */
+.home-slot { flex: none; height: max(64px, var(--composer-h)); margin-top: var(--s6); }
+
+.home-more { display: flex; flex-direction: column; gap: var(--s8); padding-top: var(--s10); }
+/* Centred, the board stays put and only what's under the composer scrolls,
+   so the composer never drifts from its slot. What scrolls up fades out
+   before it reaches the composer's hint line. */
+.home.centred { overflow: hidden; }
+.home.centred .home-in { height: 100%; padding-bottom: 0; }
+.home.centred .home-more { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0 calc(-1 * var(--s3)); padding: var(--s8) var(--s3) var(--s10); -webkit-mask-image: linear-gradient(to bottom, transparent var(--s4), black var(--s8)); mask-image: linear-gradient(to bottom, transparent var(--s4), black var(--s8)); }
+
+.home.leaving { position: absolute; inset: 0; z-index: 1; pointer-events: none; animation: homeOut var(--d-2) var(--ease-in-out) both; }
+@keyframes homeOut { to { opacity: 0; transform: translateY(-12px) } }
+
+/* ---------- sections ---------- */
+.home-sec { display: flex; flex-direction: column; gap: var(--s2); animation: pRise var(--d-3) var(--ease-out) 220ms both; }
+.home-sec + .home-sec { animation-delay: calc(220ms + var(--stagger)); }
+.home-sec-head { margin: 0; }
+
+/* ---------- needs you ---------- */
+.ask.home-need { padding-bottom: var(--s5); }
+.home-need .row-btns { margin-top: 0; }
+
+/* ---------- recent ---------- */
+/* The app's divided rows (ui.css .list), a line each: what it was and
+   when, then what came of it. Pointing at one underlines its title, as
+   the sheets' rows do. */
+.hl-head { display: flex; align-items: baseline; gap: var(--s3); }
+.home-list .t1 { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-list .t2 { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hl-at { flex: none; font: 400 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); }
+@media (hover: hover) {
+  .home-list .rowlink:hover .t1 { text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+}
+/* Beside a panel, the greeting steps down a size. */
+.stage.with-panel .greet { font: 400 var(--t-head) var(--font-display); letter-spacing: var(--tr-head); }
+.stage.with-panel .home-top { padding-top: var(--s10); }
+
+@media (max-width: 640px) {
+  .home-in { padding-inline: var(--s2); }
+  .home-top { padding-top: max(var(--s8), calc(16dvh - var(--s10))); }
+  .home-more { padding-top: var(--s8); gap: var(--s6); }
+  /* With nothing under it, the greeting sits in the middle of the screen
+     rather than at the top of an empty one. */
+  .home-in:has(> .home-more:empty) > .home-top { margin-block: auto; padding-top: 0; }
+}

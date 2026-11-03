@@ -1,0 +1,261 @@
+/* Settings, the Notifications sheet and the account menu (WP-12). The
+   frames, rows, fields and the menu itself are primitives (ui/ui.css); this
+   is what's particular to them: where the menu opens, who's signed in, the
+   Settings window, and how a section's parts and inset groups stack. */
+
+/* ---------- the account menu ---------- */
+/* It drops from the avatar, its corner under the button. */
+.account-menu { top: calc(var(--header-h) + env(safe-area-inset-top) - var(--s1)); right: max(var(--s3), env(safe-area-inset-right)); width: 272px; }
+.menu .who { display: flex; align-items: center; gap: var(--s3); padding: var(--s2) var(--s3) var(--s3); }
+.who-text { min-width: 0; display: flex; flex-direction: column; font: 400 var(--t-micro) var(--font); color: var(--text-3); }
+.who-text b, .who-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who-text b { font: 600 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--ink); }
+.avatar.lg { width: 32px; height: 32px; flex: none; }
+.menu .count { min-width: 20px; height: 20px; padding: 0 var(--s1); display: inline-flex; align-items: center; justify-content: center; border-radius: var(--r-full); background: var(--ink); color: var(--on-ink); font-weight: 600; }
+/* The theme, three small choices in one row of the menu. Its glyph and
+   label sit where every item's do (ui.css .menu [role=menuitem]). */
+.menu-theme { height: 36px; display: flex; align-items: center; gap: var(--s1); padding: 0 var(--s1) 0 var(--s3); }
+.menu-theme > svg.i { margin-right: calc(var(--s3) - var(--s1)); color: var(--text-2); }
+.menu-theme-label { flex: 1; font: 400 var(--t-body) var(--font); color: var(--ink); }
+.menu-theme-seg button { display: flex; align-items: center; justify-content: center; width: 32px; padding: 0; }
+.menu-theme-seg button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+@media (pointer: coarse) { .menu-theme { height: 44px; } .menu-theme-seg button { width: 40px; height: 32px; } }
+
+/* ---------- sections and inset groups ---------- */
+/* A Settings section's parts (and the inbox's): a short title, then an
+   inset group of rows divided by hairlines. The group is framed by a hairline
+   only, so it reads the same in both themes and fields keep their well. */
+.settings-body > .intro { margin-bottom: var(--s5); }
+.settings-body :is(.sec, .intro, .add-row, .search-row) + .sec { margin-top: var(--s6); }
+.settings-body .add-row + .sec:not(:has(.sec-head)) { margin-top: var(--s4); }
+.sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); margin: 0 0 var(--s2); padding: 0 var(--s1); }
+/* As .list-head. */
+.sec-title { margin: 0; font: 600 var(--t-small) var(--font); color: var(--text-2); }
+
+.group { border: 1px solid var(--line); border-radius: var(--r-md); }
+.group.pad { padding: var(--s4); }
+.group.danger { border-color: color-mix(in oklab, var(--bad) 28%, transparent); }
+.group.pad > .field:first-child, .group.pad > .inline:first-child > .field { margin-top: 0; }
+/* Fields side by side line up by their labels, so a hint under one
+   doesn't push its neighbour down. On a phone there's no room for two (a
+   timezone would be cut short), so they stack, spaced as fields are. */
+.group.pad > .inline { align-items: flex-start; row-gap: var(--s4); }
+.group.pad > .inline > .field { min-width: 180px; }
+.group .row-btns.end, .row-btns.end { justify-content: flex-end; margin-top: var(--s4); }
+
+.row-list { list-style: none; margin: 0; padding: 0; }
+.row { display: flex; align-items: center; gap: var(--s3); min-height: 56px; padding: var(--s3) var(--s4); }
+.row-list > .row + .row, .group > .row + .row { border-top: 1px solid var(--line); }
+.row-lead { flex: none; display: flex; align-items: center; align-self: flex-start; padding-top: 1px; }
+.row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.row-label { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s2); font: 500 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--ink); overflow-wrap: anywhere; }
+.row-label.quote { display: block; font-weight: 400; text-wrap: pretty; }
+.row-label > .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.row-sub { font: 400 var(--t-small) var(--font); color: var(--text-3); overflow-wrap: anywhere; text-wrap: pretty; }
+.row-sub.strong { color: var(--text-2); }
+.row-sub.clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.row-meta { margin-top: 2px; font: 400 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); }
+.row-meta:empty { display: none; }
+.row-end { flex: none; display: flex; align-items: center; gap: var(--s1); }
+.row-end.top { align-self: flex-start; padding-top: 2px; }
+.row .rowlink { all: unset; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; cursor: pointer; border-radius: var(--r-xs); }
+.row .rowlink:focus-visible { outline: 2px solid var(--focus); outline-offset: 4px; }
+@media (hover: hover) {
+  .row .rowlink:hover .row-label { text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+  .row .rowlink:hover .row-label.quote { text-decoration: none; }
+  .row.memory:has(.rowlink:hover) { background: var(--hover); }
+}
+:is(.row-list, .group) > .row:first-child { border-top-left-radius: calc(var(--r-md) - 1px); border-top-right-radius: calc(var(--r-md) - 1px); }
+:is(.row-list, .group) > .row:last-child { border-bottom-left-radius: calc(var(--r-md) - 1px); border-bottom-right-radius: calc(var(--r-md) - 1px); }
+.row-actions { display: flex; gap: var(--s1); margin: var(--s2) 0 0 calc(-1 * var(--s3)); }
+.row-actions .quiet { color: var(--text-2); }
+.row-form { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-top: var(--s3); }
+.row-form .field { flex: 1 1 180px; }
+/* Cancel and Save stay together; when they don't fit beside the field
+   they go under it, at the end. */
+.row-form-btns { display: flex; gap: var(--s1); margin-left: auto; }
+.row-edit { flex: 1; min-width: 0; }
+.row-edit .row-btns { margin-top: var(--s2); }
+.row .unread-dot { margin: 0; }
+.row.notice:not(.unread) .row-label { font-weight: 400; }
+/* New ones carry a dot in a gutter of their own, so every title starts at
+   the same place; the gutter is one title line tall to centre the dot. */
+.row.notice .row-lead { width: var(--s2); height: 1lh; padding: 0; font: 500 var(--t-body) var(--font); }
+.row .avatar { width: 32px; height: 32px; }
+.skel-text { gap: var(--s2); padding: var(--s1) 0; }
+/* On phones, a row's buttons go under its text so the text keeps room. */
+@media (max-width: 640px) {
+  .row.login, .row.person { flex-wrap: wrap; }
+  .row.login .row-end, .row.person .row-end { width: 100%; justify-content: flex-end; margin-top: calc(-1 * var(--s1)); }
+}
+
+/* A field label that isn't a <label> (a segmented choice). */
+.field-label { font: 500 var(--t-small) var(--font); color: var(--text-2); }
+.preview { margin-top: var(--s3); font: 500 var(--t-small) var(--font); color: var(--ink); }
+.input.mono { font-family: var(--font-mono); }
+.help.tip, .help.after { margin-top: var(--s2); padding: 0 var(--s1); }
+.admin-row { margin-top: var(--s4); cursor: pointer; font: 400 var(--t-body) var(--font); }
+.admin-text { display: flex; flex-direction: column; }
+.admin-text .help { margin: 0; }
+
+/* The add field at the top of Memory: a well with + at its end. */
+.add-row { position: relative; display: flex; }
+.add-row .field { flex: 1; }
+.add-row .input { padding-right: 52px; }
+.add-row .add-btn { position: absolute; right: 2px; top: 0; }
+.search-row { position: relative; display: flex; align-items: center; margin-top: var(--s3); color: var(--text-3); }
+.search-row > svg.i { position: absolute; left: var(--s3); pointer-events: none; }
+.search-row .field { flex: 1; }
+.search-row .input { padding-left: 36px; }
+
+/* The danger zone sits apart, at the bottom. */
+.settings-body .sec + .sec.danger-zone { margin-top: var(--s10); }
+.danger-zone .sec-title { color: var(--bad); }
+
+/* Loading failures and footnotes. */
+.load-error { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s3); padding: var(--s4); border: 1px solid var(--line); border-radius: var(--r-md); font: 400 var(--t-small) var(--font); color: var(--text-2); }
+.foot-note { display: flex; gap: var(--s2); margin-top: var(--s6); padding: 0 var(--s1); font: 400 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); text-wrap: pretty; }
+.foot-note svg.i { flex: none; margin-top: -1px; }
+.settings-body .foot { margin-top: var(--s8); padding: 0 var(--s1); font: 400 var(--t-micro) var(--font); color: var(--text-3); }
+:is(.sheet-body, .settings-body) .empty-state { padding-top: var(--s10); }
+
+/* ---------- Settings ---------- */
+/* One large window: the sections and a search down the side, the chosen
+   section beside them, a hairline between. The surface with a frame over
+   the scrim, like every modal; on a phone, the whole screen. */
+.settings {
+  width: min(960px, calc(100% - 2 * var(--s6)));
+  height: min(720px, calc(100dvh - 2 * var(--s6)));
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  /* backwards, not both: a transform left on the open window would make it
+     the containing block of its position: fixed children (the toasts). */
+  animation: pPop var(--d-3) var(--spring) backwards;
+}
+dialog.settings:not([open]) { display: none; }
+dialog.settings::backdrop { background: var(--scrim); animation: pIn var(--d-2) both; }
+.settings.leaving { animation: pUnpop var(--d-2) var(--ease-in-out) both; }
+dialog.settings.leaving::backdrop { animation: pOut var(--d-2) both; }
+
+.settings-side { width: 232px; flex: none; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--line); }
+.settings-side[hidden] { display: none; }
+.settings-side-head, .settings-head { height: 64px; flex: none; display: flex; align-items: center; gap: var(--s1); }
+.settings-side-head { justify-content: space-between; padding: 0 var(--s3) 0 var(--s5); }
+.settings-side-head h2, .settings-head h2 { min-width: 0; font: 600 var(--t-title) var(--font); letter-spacing: var(--tr-title); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-search { margin: 0; padding: 0 var(--s3) var(--s3); }
+.settings-search > svg.i { left: calc(var(--s3) * 2); }
+.settings-nav { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 var(--s3) var(--s3); }
+.settings-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+
+/* A section in the side: its glyph and name. The one shown has the press
+   wash and ink; the rest are text-2 until pointed at. */
+.settings-item {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 0 var(--s3);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  font: 500 var(--t-body) var(--font);
+  letter-spacing: var(--tr-body);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--d-1) var(--ease-out), color var(--d-1) var(--ease-out);
+}
+/* Hover only washes the row; the section you're in is the one in ink, on
+   the selection wash (as the palette's chosen row). */
+@media (hover: hover) {
+  .settings-item:hover { background: var(--hover); }
+}
+.settings-item:active { background: var(--press); }
+.settings-item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.settings-item[aria-current=page] { background: var(--select); color: var(--ink); }
+.settings-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* What the search found: the setting, and its section under it. */
+.settings-item.two { align-items: flex-start; padding-block: var(--s2); }
+.settings-item.two > svg.i { margin-top: 1px; }
+.settings-item-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.settings-item-text .settings-item-label { color: var(--ink); }
+.settings-item-sub { font: 400 var(--t-small) var(--font); letter-spacing: 0; color: var(--text-3); }
+.settings-none { padding: var(--s2) var(--s3); font: 400 var(--t-small) var(--font); color: var(--text-3); overflow-wrap: anywhere; text-wrap: pretty; }
+
+.settings-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.settings-head { padding: 0 var(--s3) 0 var(--s6); border-bottom: 1px solid var(--line); }
+.settings-head h2 { flex: 1; }
+/* The title takes the focus when a phone moves to a section, to say where
+   it is; it isn't a control, so it shows no ring. */
+.settings-head h2:focus { outline: none; }
+.settings-actions { display: flex; align-items: center; gap: var(--s1); }
+.settings-actions:empty { display: none; }
+.settings-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--s5) var(--s6) var(--s8); }
+
+/* A setting the search found: a select wash that holds, then fades. A
+   field gets room around it from an outline of the same wash. Under
+   reduced motion the wash holds and goes (Settings.tsx takes it off). */
+.settings-body .field.found { outline: var(--s2) solid transparent; border-radius: var(--r-xs); }
+.settings-body .found { animation: settingFound calc(var(--d-4) * 3) var(--ease-in-out) both; }
+@keyframes settingFound {
+  0%, 50% { background-color: var(--select); outline-color: var(--select); }
+  to { background-color: transparent; outline-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-body .found { animation: none; background-color: var(--select); }
+  .settings-body .field.found { outline-color: var(--select); }
+}
+
+@media (pointer: coarse) {
+  .settings-item { min-height: 44px; }
+}
+
+/* On a phone it's the whole screen, one step at a time: the sections,
+   then the one chosen with Back in its head. */
+@media (max-width: 767px) {
+  .settings {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    animation: pFromBelow var(--d-3) var(--spring) backwards;
+  }
+  .settings.leaving { animation: pToBelow var(--d-2) var(--ease-in-out) both; }
+  .settings-side { width: 100%; border-right: 0; }
+  .settings-side-head, .settings-head { height: calc(64px + env(safe-area-inset-top)); padding-top: env(safe-area-inset-top); }
+  .settings-side-head { padding-left: var(--s5); padding-right: max(var(--s2), env(safe-area-inset-right)); }
+  .settings-head { padding-left: max(var(--s1), env(safe-area-inset-left)); padding-right: max(var(--s2), env(safe-area-inset-right)); }
+  .settings-search { padding: 0 var(--s4) var(--s3); }
+  .settings-search > svg.i { left: calc(var(--s4) + var(--s3)); }
+  .settings-nav { padding: 0 var(--s2) calc(var(--s4) + env(safe-area-inset-bottom)); }
+  .settings-item { min-height: 48px; }
+  .settings-item > svg.i:last-child { color: var(--text-3); }
+  .settings-main { animation: pFromRight var(--d-3) var(--spring) backwards; }
+  .settings-body { padding: var(--s4) var(--s5) calc(var(--s8) + env(safe-area-inset-bottom)); }
+}
+
+/* The gallery draws it in place. */
+.settings.settings-inline { position: relative; height: 720px; width: 100%; max-width: 960px; animation: none; }
+
+/* ---------- toasts ---------- */
+/* The host is only there to pause the timers on hover; it takes no room. */
+.toast-host { display: contents; }
+/* In a sheet or Reflect the stack is that dialog's: centred on it, at its
+   foot, rather than over a composer that's behind the scrim. */
+.app .toast-host.in-modal .toasts { position: absolute; bottom: calc(var(--s5) + env(safe-area-inset-bottom)); }
+/* Beside a panel the stack is the conversation column's, over the composer
+   docked under it (layout.css puts the column there), rather than centred
+   on the window, across the panel's edge and over what it shows. */
+@media (min-width: 900px) {
+  .stage.with-panel:not(.closing) ~ .toast-host:not(.in-modal) .toasts { left: calc(100% - var(--side) - var(--col-w)); width: var(--col-w); transform: none; }
+}
+.toast .toast-act { margin: calc(-1 * var(--s2)) 0; font-weight: 600; }
