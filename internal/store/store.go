@@ -447,6 +447,15 @@ func (s *Store) GetKV(ctx context.Context, key string) (string, error) {
 }
 
 func (s *Store) SetKV(ctx context.Context, key, value string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO kv(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return setKV(ctx, s.db, key, value)
+}
+
+// execer is what writes run against: the database, or a transaction.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func setKV(ctx context.Context, x execer, key, value string) error {
+	_, err := x.ExecContext(ctx, `INSERT INTO kv(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
 }

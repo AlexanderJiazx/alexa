@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -292,22 +293,40 @@ func (w *watchdog) err(err error) error {
 
 // connTrace records how long each phase of a request took, so slow
 // responses can be blamed on DNS, connecting, TLS or the API itself.
+//
+// The transport calls the hooks from its own goroutines, WroteRequest from
+// the one writing the body, which can still be at it when Do returns (the
+// API answered before the whole body went out). So every field is read and
+// written under mu.
 type connTrace struct {
+	mu                                                                          sync.Mutex
 	dnsStart, dnsDone, connStart, connDone, tlsStart, tlsDone, wrote, firstByte time.Time
 	reused                                                                      bool
 }
 
+// stamp records the time now in one of t's fields.
+func (t *connTrace) stamp(field *time.Time) {
+	now := time.Now()
+	t.mu.Lock()
+	*field = now
+	t.mu.Unlock()
+}
+
 func (t *connTrace) hooks() *httptrace.ClientTrace {
 	return &httptrace.ClientTrace{
-		GotConn:              func(i httptrace.GotConnInfo) { t.reused = i.Reused },
-		DNSStart:             func(httptrace.DNSStartInfo) { t.dnsStart = time.Now() },
-		DNSDone:              func(httptrace.DNSDoneInfo) { t.dnsDone = time.Now() },
-		ConnectStart:         func(string, string) { t.connStart = time.Now() },
-		ConnectDone:          func(string, string, error) { t.connDone = time.Now() },
-		TLSHandshakeStart:    func() { t.tlsStart = time.Now() },
-		TLSHandshakeDone:     func(tls.ConnectionState, error) { t.tlsDone = time.Now() },
-		WroteRequest:         func(httptrace.WroteRequestInfo) { t.wrote = time.Now() },
-		GotFirstResponseByte: func() { t.firstByte = time.Now() },
+		GotConn: func(i httptrace.GotConnInfo) {
+			t.mu.Lock()
+			t.reused = i.Reused
+			t.mu.Unlock()
+		},
+		DNSStart:             func(httptrace.DNSStartInfo) { t.stamp(&t.dnsStart) },
+		DNSDone:              func(httptrace.DNSDoneInfo) { t.stamp(&t.dnsDone) },
+		ConnectStart:         func(string, string) { t.stamp(&t.connStart) },
+		ConnectDone:          func(string, string, error) { t.stamp(&t.connDone) },
+		TLSHandshakeStart:    func() { t.stamp(&t.tlsStart) },
+		TLSHandshakeDone:     func(tls.ConnectionState, error) { t.stamp(&t.tlsDone) },
+		WroteRequest:         func(httptrace.WroteRequestInfo) { t.stamp(&t.wrote) },
+		GotFirstResponseByte: func() { t.stamp(&t.firstByte) },
 	}
 }
 
@@ -323,9 +342,12 @@ func (t *connTrace) log(path string, start time.Time, err error) {
 	if total > 5*time.Second {
 		level = slog.LevelWarn
 	}
+	t.mu.Lock()
+	reused, dns, connect := t.reused, span(t.dnsStart, t.dnsDone), span(t.connStart, t.connDone)
+	tlsTook, wait := span(t.tlsStart, t.tlsDone), span(t.wrote, t.firstByte)
+	t.mu.Unlock()
 	slog.Log(context.Background(), level, "model API response headers", "path", path, "total", total,
-		"reused_conn", t.reused, "dns", span(t.dnsStart, t.dnsDone), "connect", span(t.connStart, t.connDone),
-		"tls", span(t.tlsStart, t.tlsDone), "server_wait", span(t.wrote, t.firstByte), "err", err)
+		"reused_conn", reused, "dns", dns, "connect", connect, "tls", tlsTook, "server_wait", wait, "err", err)
 }
 
 // Create performs a non-streaming request.

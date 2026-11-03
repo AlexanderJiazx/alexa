@@ -5,6 +5,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -33,9 +35,13 @@ import (
 type chrome struct {
 	cmd  *exec.Cmd
 	url  string        // the bridge chromedp connects to, once
+	page string        // the target id of the tab Chrome opened with (firstPage)
 	done chan struct{} // closed once Chrome has exited
 	out  *lastOutput
 }
+
+// firstPageWait is how long Chrome has to open its first tab.
+const firstPageWait = 30 * time.Second
 
 // startChrome starts Chrome with its debugging pipe on descriptors 3 (what
 // it reads) and 4 (what it writes), and the bridge chromedp connects to.
@@ -82,11 +88,110 @@ func startChrome(path string, args []string, env UserEnv) (*chrome, error) {
 		_ = cmd.Wait()
 		close(c.done)
 	}()
-	if c.url, err = bridge(cmdW, resR, c.done); err != nil {
+	// What firstPage reads ahead stays in this reader, which the bridge
+	// reads on from.
+	fromChrome := &bufferedPipe{Reader: bufio.NewReaderSize(resR, 1<<16), Closer: resR}
+	if c.page, err = c.firstPage(cmdW, fromChrome.Reader, firstPageWait); err != nil {
+		c.stop()
+		cmdW.Close()
+		fromChrome.Close()
+		if why := c.exited(); why != "" {
+			return nil, fmt.Errorf("%w (%s)", err, why)
+		}
+		return nil, err
+	}
+	if c.url, err = bridge(cmdW, fromChrome, c.done); err != nil {
 		c.stop()
 		return nil, err
 	}
 	return c, nil
+}
+
+// bufferedPipe is the read end of Chrome's pipe with what's been read ahead
+// of the bridge.
+type bufferedPipe struct {
+	*bufio.Reader
+	io.Closer
+}
+
+// firstPage waits for the tab Chrome opens with and returns its target id,
+// for chromedp to attach to as the browser's own tab (launch), as it does
+// with a Chrome it starts itself. Until that tab is there Chrome has no
+// window, and it refuses to open a tab ("no browser is open"). Over the
+// pipe nothing says when that is, so this asks Chrome for its pages until
+// one is there, or Chrome exits, or timeout passes.
+func (c *chrome) firstPage(toChrome io.Writer, fromChrome *bufio.Reader, timeout time.Duration) (string, error) {
+	type found struct {
+		id  string
+		err error
+	}
+	res := make(chan found, 1)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		id, err := pollFirstPage(toChrome, fromChrome, stop)
+		res <- found{id, err}
+	}()
+	select {
+	case f := <-res:
+		if f.err != nil {
+			return "", fmt.Errorf("waiting for chrome's first tab: %w", f.err)
+		}
+		return f.id, nil
+	case <-c.done:
+		return "", errors.New("chrome exited before opening a tab")
+	case <-time.After(timeout):
+		// The caller stops Chrome, which ends the poll's read.
+		return "", fmt.Errorf("chrome opened no tab within %s", timeout)
+	}
+}
+
+// pollFirstPage asks Chrome for its targets until a page is among them, and
+// returns its id. Nothing has asked Chrome to send events yet, so every
+// message that comes back answers a request; any that doesn't answer the
+// latest is skipped.
+func pollFirstPage(toChrome io.Writer, fromChrome *bufio.Reader, stop <-chan struct{}) (string, error) {
+	for id := 1; ; id++ {
+		if _, err := fmt.Fprintf(toChrome, `{"id":%d,"method":"Target.getTargets"}`+"\x00", id); err != nil {
+			return "", err
+		}
+		var reply struct {
+			ID     int `json:"id"`
+			Result struct {
+				TargetInfos []struct {
+					TargetID string `json:"targetId"`
+					Type     string `json:"type"`
+				} `json:"targetInfos"`
+			} `json:"result"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		for reply.ID != id {
+			msg, err := fromChrome.ReadBytes(0)
+			if err != nil {
+				return "", err
+			}
+			reply.ID, reply.Error = 0, nil
+			reply.Result.TargetInfos = nil
+			if err := json.Unmarshal(msg[:len(msg)-1], &reply); err != nil {
+				return "", fmt.Errorf("reading chrome's answer: %w", err)
+			}
+		}
+		if reply.Error != nil {
+			return "", errors.New(reply.Error.Message)
+		}
+		for _, t := range reply.Result.TargetInfos {
+			if t.Type == "page" {
+				return t.TargetID, nil
+			}
+		}
+		select {
+		case <-stop:
+			return "", errors.New("stopped")
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
 }
 
 // chromeCmd is the command that runs Chrome for env: with nothing of the

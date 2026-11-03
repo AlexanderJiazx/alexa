@@ -186,14 +186,23 @@ func (s *Store) AddSessionUsage(ctx context.Context, userID, in, out int64) erro
 // that has changed since.
 var ErrChanged = errors.New("changed meanwhile")
 
+// Kept is what's kept of the items a compaction deletes: their moments for
+// recall, and notes in kv (recall's mark, the memory review's unread part).
+// CompactSession writes it in the transaction that deletes them, so a
+// crash or a failed write can't lose the items without it.
+type Kept struct {
+	Recall []RecallDoc
+	KV     map[string]string
+}
+
 // CompactSession replaces the conversation up to item id through with
 // summary, and deletes those items: replay and the model's view only read
 // what comes after the summary (Conversation), so nothing reads them again
-// (BH-3). It writes only if the conversation is still as the summary was
-// made from: compacted through since, its newest item last. Otherwise
-// (another compaction, a new item, a reset) it writes nothing and returns
-// ErrChanged.
-func (s *Store) CompactSession(ctx context.Context, userID int64, summary string, since, through, last int64) error {
+// (BH-3). What's kept of them goes in with the delete. It writes only if
+// the conversation is still as the summary was made from: compacted
+// through since, its newest item last. Otherwise (another compaction, a
+// new item, a reset) it writes nothing and returns ErrChanged.
+func (s *Store) CompactSession(ctx context.Context, userID int64, summary string, since, through, last int64, kept Kept) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -219,6 +228,14 @@ func (s *Store) CompactSession(ctx context.Context, userID int64, summary string
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM session_items WHERE user_id=? AND id<=?`, userID, through); err != nil {
 		return err
+	}
+	if err := indexRecall(ctx, tx, userID, kept.Recall); err != nil {
+		return err
+	}
+	for k, v := range kept.KV {
+		if err := setKV(ctx, tx, k, v); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -454,6 +471,32 @@ func (s *Store) UpdateEntry(ctx context.Context, e *Entry) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SettleTopic records the topic call's answer in a message's entry: it
+// drops data.topic, and sets data.followUp when the message carries the
+// topic on. Nothing else in the entry changes, so what was written to it
+// while the call was out stays. It returns the entry as it now is, or
+// ErrNotFound when it's gone or no longer waiting on its call.
+func (s *Store) SettleTopic(ctx context.Context, userID, id int64, follow bool) (*Entry, error) {
+	data := `json_remove(data, '$.topic')`
+	if follow {
+		data = `json_set(json_remove(data, '$.topic'), '$.followUp', json('true'))`
+	}
+	var e Entry
+	var d string
+	err := s.db.QueryRowContext(ctx, `UPDATE feed SET data=`+data+`, updated_at=?
+		WHERE id=? AND user_id=? AND json_valid(data) AND json_extract(data, '$.topic')='pending'
+		RETURNING id, user_id, kind, text, done_text, status, data, created_at, updated_at`, now(), id, userID).
+		Scan(&e.ID, &e.UserID, &e.Kind, &e.Text, &e.DoneText, &e.Status, &d, &e.CreatedAt, &e.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	e.Data = json.RawMessage(d)
+	return &e, nil
 }
 
 // PendingTopics returns, for every user, the messages still marked as

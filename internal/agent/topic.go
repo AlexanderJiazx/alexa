@@ -3,11 +3,13 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
+	"alexagent/internal/hub"
 	"alexagent/internal/store"
 )
 
@@ -214,21 +216,22 @@ func (rt *Runtime) settleTopic(userID int64, e *store.Entry, p pendingTopic, msg
 		if !follow && !p.held && rt.surfaceMoves(userID) == p.moves {
 			rt.surfaceOnNewExchange(ctx, userID, false)
 		}
-		rt.updateEntry(ctx, settled(e, follow))
+		rt.settleEntry(ctx, userID, e.ID, follow)
 	}()
 }
 
-// settled is a message's entry with its topic decided.
-func settled(e *store.Entry, follow bool) *store.Entry {
-	d := map[string]any{}
-	_ = json.Unmarshal(e.Data, &d)
-	delete(d, "topic")
-	if follow {
-		d["followUp"] = true
+// settleEntry writes the topic call's answer into a message's entry, and
+// nothing else of it: the entry may have changed since the message came
+// in. Clients get the entry as it now is.
+func (rt *Runtime) settleEntry(ctx context.Context, userID, id int64, follow bool) {
+	e, err := rt.st.SettleTopic(ctx, userID, id, follow)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			slog.Warn("settle topic", "user", userID, "entry", id, "err", err)
+		}
+		return
 	}
-	out := *e
-	out.Data = marshal(d)
-	return &out
+	rt.hub.Publish(userID, hub.Event{Type: "entry", Data: e})
 }
 
 // settleLeftTopics decides the messages whose topic call a stop cut short:
@@ -241,6 +244,6 @@ func (rt *Runtime) settleLeftTopics(ctx context.Context) {
 		return
 	}
 	for _, e := range left {
-		rt.updateEntry(ctx, settled(e, false))
+		rt.settleEntry(ctx, e.UserID, e.ID, false)
 	}
 }

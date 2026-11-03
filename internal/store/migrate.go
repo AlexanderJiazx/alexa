@@ -62,6 +62,28 @@ CREATE INDEX IF NOT EXISTS auth_sessions_expiry ON auth_sessions(expires_at);
 CREATE INDEX IF NOT EXISTS schedules_user ON schedules(user_id, created_at);
 CREATE INDEX IF NOT EXISTS feed_status ON feed(user_id, status);`,
 	},
+	{
+		// Deleted memories wait out the time they can be restored in their
+		// own table, not behind deleted_at in memories: a build from before
+		// soft delete reads every row of memories, so run on this database
+		// after a rollback, it would put what the user deleted back into
+		// Alexa's instructions. memories.deleted_at is no longer set, and
+		// reads still skip a row that has it.
+		name: "deleted memories apart",
+		sql: `CREATE TABLE IF NOT EXISTS memories_deleted (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'user',
+  created_at INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL DEFAULT 0,
+  deleted_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS memories_deleted_user ON memories_deleted(user_id, deleted_at);
+INSERT OR REPLACE INTO memories_deleted(id, user_id, content, source, created_at, updated_at, deleted_at)
+  SELECT id, user_id, content, source, created_at, updated_at, deleted_at FROM memories WHERE deleted_at>0;
+DELETE FROM memories WHERE deleted_at>0;`,
+	},
 }
 
 // schemaVersion is the version a database ends at with this build.

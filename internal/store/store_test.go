@@ -109,7 +109,7 @@ func TestSessionLifecycle(t *testing.T) {
 		ids = append(ids, r.ID)
 	}
 	// Compaction drops what's folded into the summary from the replay.
-	if err := s.CompactSession(ctx, u.ID, "the summary", 0, ids[2], ids[4]); err != nil {
+	if err := s.CompactSession(ctx, u.ID, "the summary", 0, ids[2], ids[4], Kept{}); err != nil {
 		t.Fatal(err)
 	}
 	ss, _ = s.GetSession(ctx, u.ID)
@@ -349,5 +349,41 @@ func TestUpdateEntryGone(t *testing.T) {
 	}
 	if err := s.UpdateEntry(ctx, e); !errors.Is(err, ErrNotFound) {
 		t.Errorf("UpdateEntry on a cleared feed = %v, want ErrNotFound", err)
+	}
+}
+
+// The topic call's answer changes only the topic fields of the message's
+// entry: what was written to it meanwhile stays. It settles once.
+func TestSettleTopic(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	u, _ := s.CreateUser(ctx, "a", "x", "A", true)
+	e := &Entry{UserID: u.ID, Kind: "user", Text: "and tomorrow?", Data: json.RawMessage(`{"start":true,"topic":"pending","clientId":"c1"}`)}
+	if err := s.AddEntry(ctx, e); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := s.PendingTopics(ctx); len(left) != 1 || left[0].ID != e.ID {
+		t.Fatalf("PendingTopics = %+v", left)
+	}
+	if _, err := s.SettleTopic(ctx, u.ID+1, e.ID, false); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("settling another user's entry = %v, want ErrNotFound", err)
+	}
+	if err := s.SetEntryStatus(ctx, u.ID, e.ID, "answered"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.SettleTopic(ctx, u.ID, e.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d map[string]any
+	_ = json.Unmarshal(got.Data, &d)
+	if got.Status != "answered" || got.Text != "and tomorrow?" || d["topic"] != nil || d["followUp"] != true || d["start"] != true || d["clientId"] != "c1" {
+		t.Fatalf("settled entry = %+v, data %v", got, d)
+	}
+	if left, _ := s.PendingTopics(ctx); len(left) != 0 {
+		t.Fatalf("still pending: %+v", left)
+	}
+	if _, err := s.SettleTopic(ctx, u.ID, e.ID, false); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("settling again = %v, want ErrNotFound", err)
 	}
 }

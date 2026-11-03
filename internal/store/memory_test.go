@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -152,5 +153,78 @@ func TestUpdateMemoryMakesItTheUsers(t *testing.T) {
 	ms, _ := s.Memories(ctx, u.ID)
 	if len(ms) != 1 || ms[0].Content != "Likes jazz and blues" || ms[0].Source != "user" || ms[0].UpdatedAt < ms[0].CreatedAt {
 		t.Fatalf("after the user's edit = %+v", ms[0])
+	}
+}
+
+// A deleted entry leaves memories, which a build from before soft delete
+// reads in full: rolled back to, it can't put the entry back in Alexa's
+// instructions. Restored, the entry is as it was, id and all. One deleted
+// behind memories.deleted_at, before deleted entries had their own table,
+// moves there with the migration.
+func TestDeletedMemoryLeavesTheTable(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "m.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := s.CreateUser(ctx, "u", "x", "U", false)
+	added, err := s.EditMemories(ctx, u.ID, func([]*Memory) ([]int64, []NewMemory, error) {
+		return nil, []NewMemory{{Content: "Likes jazz", Source: "review"}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := added[0]
+	// What a build from before soft delete reads (main at 266ab3e).
+	oldRead := func(s *Store) int {
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM memories WHERE user_id=?`, u.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if ok, err := s.DeleteMemory(ctx, u.ID, m.ID); !ok || err != nil {
+		t.Fatalf("delete = %v, %v", ok, err)
+	}
+	if n := oldRead(s); n != 0 {
+		t.Fatalf("an older build would read %d entries after the delete", n)
+	}
+	if ok, err := s.RestoreMemory(ctx, u.ID, m.ID); !ok || err != nil {
+		t.Fatalf("restore = %v, %v", ok, err)
+	}
+	if ms, _ := s.Memories(ctx, u.ID); len(ms) != 1 || ms[0].ID != m.ID || ms[0].Source != "review" || ms[0].CreatedAt != m.CreatedAt || ms[0].Content != "Likes jazz" {
+		t.Fatalf("after restore = %+v", ms)
+	}
+	if ok, _ := s.RestoreMemory(ctx, u.ID, m.ID); ok {
+		t.Fatal("restored twice")
+	}
+
+	// As deleted before the table: flagged, at the version before it.
+	before := 0
+	for i, mg := range migrations {
+		if mg.name == "deleted memories apart" {
+			before = schemaBaseline + i
+		}
+	}
+	if _, err := s.db.Exec(`UPDATE memories SET deleted_at=? WHERE id=?`, now(), m.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, before)); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if s, err = Open(path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if n := oldRead(s); n != 0 {
+		t.Fatalf("after the migration an older build would read %d entries", n)
+	}
+	if ok, _ := s.RestoreMemory(ctx, u.ID, m.ID); !ok {
+		t.Fatal("the entry deleted behind the flag can't be restored")
+	}
+	if ms, _ := s.Memories(ctx, u.ID); len(ms) != 1 || ms[0].ID != m.ID {
+		t.Fatalf("after restore = %+v", ms)
 	}
 }

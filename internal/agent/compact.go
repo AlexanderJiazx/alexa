@@ -162,17 +162,18 @@ func (rt *Runtime) commitCompaction(ctx context.Context, u *store.User, c *compa
 	// The plan survives word for word, in the summary and recited after it.
 	plan := rt.currentPlan(ctx, u.ID)
 	summary = withPlan(summary, plan)
-	keep := rt.beforeFold(ctx, u.ID, c.ss.CompactedThrough, c.rows[c.cut-1].ID) // recall.go
-	err := rt.st.CompactSession(ctx, u.ID, summary, c.ss.CompactedThrough, c.rows[c.cut-1].ID, c.rows[len(c.rows)-1].ID)
+	// The folded items are deleted with the commit; what recall and the
+	// memory review keep of them is written in the same transaction
+	// (recall.go).
+	since, through := c.ss.CompactedThrough, c.rows[c.cut-1].ID
+	kept := rt.keepFolded(ctx, u, rt.beforeFold(ctx, u.ID, since, through), c.rows[:c.cut], c.items[:c.cut])
+	err := rt.st.CompactSession(ctx, u.ID, summary, since, through, c.rows[len(c.rows)-1].ID, kept)
 	if errors.Is(err, store.ErrChanged) {
 		return errCompactChanged
 	}
 	if err != nil {
 		return err
 	}
-	// The folded items are gone from the store: recall and the memory
-	// review keep what they need of them (recall.go).
-	rt.afterFold(ctx, u, keep, c.rows[:c.cut], c.items[:c.cut])
 	_ = rt.recitePlan(ctx, u.ID, plan)
 	if c.cut > c.from {
 		if note := foldedNote(c.items[c.from:c.cut]); note != "" {

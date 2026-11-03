@@ -75,24 +75,56 @@ func (s *Store) UpdateMemory(ctx context.Context, userID, id int64, content stri
 // DeleteMemory deletes an entry. It can be restored for a while
 // (RestoreMemory); entries deleted longer ago go for good.
 func (s *Store) DeleteMemory(ctx context.Context, userID, id int64) (bool, error) {
-	t := now()
-	res, err := s.db.ExecContext(ctx, `UPDATE memories SET deleted_at=? WHERE id=? AND user_id=? AND deleted_at=0`, t, id, userID)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
-	_, _ = s.db.ExecContext(ctx, `DELETE FROM memories WHERE user_id=? AND deleted_at>0 AND deleted_at<?`, userID, t-keepDeleted.Milliseconds())
-	return n > 0, nil
+	defer tx.Rollback()
+	t := now()
+	ok, err := trashMemory(ctx, tx, userID, id, t)
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM memories_deleted WHERE user_id=? AND deleted_at<?`, userID, t-keepDeleted.Milliseconds()); err != nil {
+		return false, err
+	}
+	return ok, tx.Commit()
 }
 
-// RestoreMemory brings back a deleted entry.
-func (s *Store) RestoreMemory(ctx context.Context, userID, id int64) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE memories SET deleted_at=0 WHERE id=? AND user_id=? AND deleted_at>0`, id, userID)
+// trashMemory moves a live entry out of memories into memories_deleted,
+// where no build reads it as memory, and says whether there was one.
+func trashMemory(ctx context.Context, tx *sql.Tx, userID, id, at int64) (bool, error) {
+	res, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO memories_deleted(id, user_id, content, source, created_at, updated_at, deleted_at)
+		SELECT id, user_id, content, source, created_at, updated_at, ? FROM memories WHERE id=? AND user_id=? AND deleted_at=0`, at, id, userID)
 	if err != nil {
 		return false, err
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM memories WHERE id=? AND user_id=?`, id, userID)
+	return err == nil, err
+}
+
+// RestoreMemory brings back a deleted entry, with its id.
+func (s *Store) RestoreMemory(ctx context.Context, userID, id int64) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `INSERT INTO memories(id, user_id, content, source, created_at, updated_at)
+		SELECT id, user_id, content, source, created_at, updated_at FROM memories_deleted WHERE id=? AND user_id=?`, id, userID)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM memories_deleted WHERE id=? AND user_id=?`, id, userID); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 // EditMemories changes the user's memory in one transaction. edit sees the
@@ -120,11 +152,11 @@ func (s *Store) EditMemories(ctx context.Context, userID int64, edit func(live [
 	}
 	t := now()
 	for _, id := range remove {
-		res, err := tx.ExecContext(ctx, `UPDATE memories SET deleted_at=? WHERE id=? AND user_id=? AND deleted_at=0`, t, id, userID)
+		ok, err := trashMemory(ctx, tx, userID, id, t)
 		if err != nil {
 			return nil, err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
+		if !ok {
 			return nil, fmt.Errorf("memory %d: %w", id, ErrNotFound)
 		}
 	}

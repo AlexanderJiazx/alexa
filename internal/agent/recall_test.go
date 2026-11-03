@@ -159,7 +159,10 @@ func TestRecallBackfill(t *testing.T) {
 	if len(k.older) != 1 || !k.first {
 		t.Fatalf("beforeFold = %+v", k)
 	}
-	e.rt.afterFold(e.ctx, e.user, k, rows, items)
+	last := rows[len(rows)-1].ID
+	if err := e.st.CompactSession(e.ctx, uid, "summary", 0, last, last, e.rt.keepFolded(e.ctx, e.user, k, rows, items)); err != nil {
+		t.Fatal(err)
+	}
 	for q, want := range map[string]string{"sister": "item:", "Lisbon": "item:", "bento": "report:r1"} {
 		hits, _ := e.st.SearchRecall(e.ctx, uid, ftsQuery(q), 0, 0, 5)
 		if len(hits) != 1 || !strings.HasPrefix(hits[0].Ref, want) {

@@ -75,6 +75,14 @@ func (s *Store) IndexRecall(ctx context.Context, userID int64, docs []RecallDoc)
 		return err
 	}
 	defer tx.Rollback()
+	if err := indexRecall(ctx, tx, userID, docs); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// indexRecall adds documents in tx, replacing those with the same ref.
+func indexRecall(ctx context.Context, tx *sql.Tx, userID int64, docs []RecallDoc) error {
 	for _, d := range docs {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO recall_docs(user_id, ref, kind, item_id, at, text) VALUES(?,?,?,?,?,?)
 			ON CONFLICT(user_id, ref) DO UPDATE SET kind=excluded.kind, item_id=excluded.item_id, at=excluded.at, text=excluded.text`,
@@ -82,7 +90,7 @@ func (s *Store) IndexRecall(ctx context.Context, userID int64, docs []RecallDoc)
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // DeleteRecall removes documents by ref.

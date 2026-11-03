@@ -260,7 +260,10 @@ func (m *Manager) launch(env UserEnv) (*Browser, error) {
 		return nil, fmt.Errorf("launch chrome: %w", err)
 	}
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), proc.url, chromedp.NoModifyURL)
-	rootCtx, rootCancel := chromedp.NewContext(allocCtx)
+	// The root context is the tab Chrome opened with. Over a remote
+	// allocator chromedp would open a new one, which Chrome refuses until it
+	// has a window (firstPage).
+	rootCtx, rootCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(proc.page)))
 	if err := runWithTimeout(rootCtx, 45*time.Second); err != nil {
 		rootCancel()
 		allocCancel()

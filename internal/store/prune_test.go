@@ -40,10 +40,12 @@ func TestCompactSessionDeletesWhatItFolds(t *testing.T) {
 
 	// Based on an older read: a new item came since, or another
 	// compaction, or a reset.
-	if err := s.CompactSession(ctx, u.ID, "stale", 0, ids[2], ids[3]); !errors.Is(err, ErrChanged) {
+	// What's kept of the folded items is written with them, or not at all.
+	kept := Kept{Recall: []RecallDoc{{Ref: "item:1", Kind: "user", ItemID: ids[0], Text: "My sister lives in Porto"}}, KV: map[string]string{"recall:1": "3"}}
+	if err := s.CompactSession(ctx, u.ID, "stale", 0, ids[2], ids[3], kept); !errors.Is(err, ErrChanged) {
 		t.Fatalf("compaction missing the newest item = %v, want ErrChanged", err)
 	}
-	if err := s.CompactSession(ctx, u.ID, "stale", ids[0], ids[2], ids[4]); !errors.Is(err, ErrChanged) {
+	if err := s.CompactSession(ctx, u.ID, "stale", ids[0], ids[2], ids[4], kept); !errors.Is(err, ErrChanged) {
 		t.Fatalf("compaction from another summary = %v, want ErrChanged", err)
 	}
 	if rows, _ := s.Items(ctx, u.ID, 0); len(rows) != 5 {
@@ -52,9 +54,21 @@ func TestCompactSessionDeletesWhatItFolds(t *testing.T) {
 	if ss, _ := s.GetSession(ctx, u.ID); ss.Summary != "" || ss.CompactedThrough != 0 {
 		t.Fatalf("a refused compaction wrote %+v", ss)
 	}
+	if hits, _ := s.SearchRecall(ctx, u.ID, "sister", 0, 0, 5); len(hits) != 0 {
+		t.Fatalf("a refused compaction indexed %+v", hits)
+	}
+	if v, err := s.GetKV(ctx, "recall:1"); err == nil {
+		t.Fatalf("a refused compaction wrote kv %q", v)
+	}
 
-	if err := s.CompactSession(ctx, u.ID, "first", 0, ids[2], ids[4]); err != nil {
+	if err := s.CompactSession(ctx, u.ID, "first", 0, ids[2], ids[4], kept); err != nil {
 		t.Fatal(err)
+	}
+	if hits, _ := s.SearchRecall(ctx, u.ID, "sister", 0, 0, 5); len(hits) != 1 || hits[0].Ref != "item:1" {
+		t.Fatalf("the compaction didn't index what it kept: %+v", hits)
+	}
+	if v, _ := s.GetKV(ctx, "recall:1"); v != "3" {
+		t.Fatalf("the compaction didn't write its kv: %q", v)
 	}
 	rows, _ := s.Items(ctx, u.ID, 0)
 	if len(rows) != 2 || rows[0].ID != ids[3] {
@@ -68,7 +82,7 @@ func TestCompactSessionDeletesWhatItFolds(t *testing.T) {
 	}
 
 	// The same compaction again finds the conversation changed.
-	if err := s.CompactSession(ctx, u.ID, "again", 0, ids[2], ids[4]); !errors.Is(err, ErrChanged) {
+	if err := s.CompactSession(ctx, u.ID, "again", 0, ids[2], ids[4], Kept{}); !errors.Is(err, ErrChanged) {
 		t.Fatalf("a second commit of the same compaction = %v, want ErrChanged", err)
 	}
 	// So does one planned before a reset.
@@ -76,7 +90,7 @@ func TestCompactSessionDeletesWhatItFolds(t *testing.T) {
 	if err := s.ResetSession(ctx, u.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CompactSession(ctx, u.ID, "after reset", ids[2], ids[4], more[len(more)-1]); !errors.Is(err, ErrChanged) {
+	if err := s.CompactSession(ctx, u.ID, "after reset", ids[2], ids[4], more[len(more)-1], Kept{}); !errors.Is(err, ErrChanged) {
 		t.Fatalf("a compaction planned before a reset = %v, want ErrChanged", err)
 	}
 }

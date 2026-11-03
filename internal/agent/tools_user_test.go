@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"alexagent/internal/llm"
 	"alexagent/internal/store"
 )
 
@@ -227,4 +228,50 @@ func TestQuestionNotifiesWhenAway(t *testing.T) {
 	if n := notes[0]; n.Title != "Alexa needs you in the browser" || !strings.HasPrefix(n.Ref, "entry:") {
 		t.Errorf("take-over notification = %+v", n)
 	}
+}
+
+// A message from a report never answers a confirm card: a report's button
+// can send anything, whatever it showed. It waits until the user answers
+// the card themselves, and Alexa reads it after. An ordinary question can
+// still be answered from the report.
+func TestReportSendDoesntConfirm(t *testing.T) {
+	e := newProgressEnv(t)
+	e.model.script(does(fc("ask", map[string]any{"question": "Book Casa Alfama for €420?", "confirm": true})))
+	e.send("Book me a quiet hotel in Lisbon")
+	if v := e.settle(); v.Status != "needs" || v.Needs == nil || !v.Needs.Confirm {
+		t.Fatalf("view = %+v", v)
+	}
+	if err := e.rt.Send(e.ctx, e.user, Message{Text: "Yes, book it", Via: "report"}); err != nil {
+		t.Fatal(err)
+	}
+	if nd := e.rt.pendingNeeds(e.ctx, e.user.ID); nd == nil || !nd.Confirm {
+		t.Fatalf("a message from a report answered the confirm card: %+v", nd)
+	}
+	if n, _ := e.st.InboxUserCount(e.ctx, e.user.ID); n != 1 {
+		t.Fatalf("%d messages waiting, want the report's", n)
+	}
+	var input string
+	e.model.script(func(req *llm.Request) []any {
+		input = string(marshal(req.Input))
+		return []any{fc("say", map[string]any{"text": "Cancelled.", "final": true})}
+	})
+	e.send("Cancel")
+	e.settle()
+	answer := strings.Index(input, "The user replied: Cancel")
+	late := strings.Index(input, "[Sent from the report] Yes, book it")
+	if answer < 0 || late < answer {
+		t.Fatalf("the model read the answer at %d and the report's message at %d: %s", answer, late, input)
+	}
+
+	e.model.script(does(fc("ask", map[string]any{"question": "Which one?", "options": []any{"Casa Alfama", "Lisboa Prata"}})))
+	e.send("Find another")
+	e.settle()
+	e.model.script(does(fc("say", map[string]any{"text": "Lisboa Prata it is.", "final": true})))
+	if err := e.rt.Send(e.ctx, e.user, Message{Text: "Lisboa Prata", Via: "report"}); err != nil {
+		t.Fatal(err)
+	}
+	if nd := e.rt.pendingNeeds(e.ctx, e.user.ID); nd != nil {
+		t.Fatalf("a choice from a report didn't answer an ordinary question: %+v", nd)
+	}
+	e.settle()
 }

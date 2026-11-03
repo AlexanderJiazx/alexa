@@ -16,7 +16,10 @@ import (
 // user mentions in passing is lost once compaction folds it away. So when
 // she's idle, every cfg.MemoryReview messages from the user, one
 // model call reads the conversation since the last review and may add up
-// to three facts, or correct facts she or an earlier review saved. It
+// to three facts, or correct facts she or an earlier review saved. It reads
+// what the user and Alexa said to each other, never what pages and files
+// said (reviewTranscript), so a page can't plant a "fact" that would then
+// sit in every later conversation. It
 // never touches what the user wrote, deletes nothing, and goes through the
 // same checks as memory_save (scan, duplicates, budget). Its entries are
 // marked source "review", so the Memory page can show them as learned; no
@@ -28,7 +31,7 @@ import (
 // user lock only to write what it decided, never during the model call.
 //
 // Compaction deletes the items it folds, so the part the review hasn't
-// read yet is kept with its progress as text (noteFolded), and two or more
+// read yet is kept with its progress as text (foldedReview), and two or more
 // folded messages from the user are reason enough to review at the next
 // idle moment.
 
@@ -63,35 +66,84 @@ func (rt *Runtime) saveReview(ctx context.Context, userID int64, st memReviewSta
 	_ = rt.st.SetKV(ctx, reviewKey(userID), string(marshal(st)))
 }
 
-// noteFolded keeps the part of a stretch compaction is folding that the
-// review hasn't read, before the items are deleted. The caller is the
+// foldedReview is the review's progress once a compaction folds rows: the
+// part of them the review hasn't read, kept as text, as the kv key and
+// value for store.CompactSession to write with the delete (keepFolded).
+// ok is false when there's nothing to keep. The caller is the
 // compaction's commit, which no review can overlap: a run cancels it, and
 // the user's own Compact commits under the user lock, as the review writes.
-func (rt *Runtime) noteFolded(ctx context.Context, userID, since int64, rows []store.ItemRow, items []storedItem) {
+func (rt *Runtime) foldedReview(ctx context.Context, userID, since int64, rows []store.ItemRow, items []storedItem) (key, value string, ok bool) {
 	if rt.cfg.MemoryReview <= 0 || len(rows) == 0 {
-		return
+		return "", "", false
 	}
-	st, ok := rt.loadReview(ctx, userID)
-	if !ok {
+	st, had := rt.loadReview(ctx, userID)
+	if !had {
 		// The first review reads from where the summary reached before:
 		// what was folded earlier isn't reviewed.
 		st.Through = since
 	}
-	var unread []storedItem
+	from := len(rows)
 	for i, r := range rows {
 		if r.ID > st.Through {
-			unread = append(unread, items[i])
+			from = min(from, i)
 			if items[i].Kind == "user" {
 				st.PendingUsers++
 			}
 		}
 	}
-	if len(unread) == 0 {
-		return
+	if from == len(rows) {
+		return "", "", false
 	}
-	st.Pending = newest(st.Pending+strings.Join(transcriptChunks(unread, 1<<30), ""), reviewMaxChars)
+	st.Pending = newest(st.Pending+reviewTranscript(items, from), reviewMaxChars)
 	st.Through = rows[len(rows)-1].ID
-	rt.saveReview(ctx, userID, st)
+	return reviewKey(userID), string(marshal(st)), true
+}
+
+// reviewTranscript is what the review reads of items[from:]: the user's
+// messages, scheduled jobs and answers, and what Alexa said, asked and
+// showed them (a report by its title only). Tool output and arguments,
+// page state, Alexa's private notes and the server's notes are left out,
+// as recall leaves them out: page and file text is the likeliest carrier
+// of words that aren't the user's, and what the review keeps goes into
+// every later conversation. The items before from are read only to tell
+// which question an answer answers.
+func reviewTranscript(items []storedItem, from int) string {
+	asks := map[string]bool{} // call ids of the questions put to the user
+	var b strings.Builder
+	for i, si := range items {
+		line := ""
+		it := llm.ParseItem(si.Item)
+		switch {
+		case isMessage(si.Kind):
+			if si.Kind != "system" {
+				line = renderItem(si)
+			}
+		case it.Type == "function_call":
+			switch it.Name {
+			case "ask", "request_takeover", "request_login":
+				asks[it.CallID] = true
+				line = renderItem(si)
+			case "say", "memory_save":
+				line = renderItem(si)
+			case "present_report":
+				args := map[string]any{}
+				_ = json.Unmarshal([]byte(it.Arguments), &args)
+				line = fmt.Sprintf("ALEXA showed a report %q", str(args, "title"))
+			}
+		case it.Type == "function_call_output" && asks[it.CallID]:
+			var o struct {
+				Output string `json:"output"`
+			}
+			_ = json.Unmarshal(si.Item, &o)
+			answer, _, _ := strings.Cut(o.Output, handBackState)
+			line = "  → " + trim(strings.Join(strings.Fields(answer), " "), 600)
+		}
+		if i >= from && line != "" {
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // maybeReviewMemory starts a review in the background if one is due. The
@@ -156,17 +208,19 @@ func (rt *Runtime) reviewMemory(ctx context.Context, u *store.User) error {
 	if !ok {
 		st.Through = ss.CompactedThrough // what was folded before isn't reviewed
 	}
-	var unread []storedItem
+	// All of the conversation is read, so an answer can be told from the
+	// question an earlier review read; from is where the unread part starts.
+	items := make([]storedItem, len(rows))
+	from := len(rows)
 	through, users := st.Through, st.PendingUsers
-	for _, r := range rows {
+	for i, r := range rows {
+		_ = json.Unmarshal(r.JSON, &items[i])
 		if r.ID <= st.Through {
 			continue
 		}
-		var si storedItem
-		_ = json.Unmarshal(r.JSON, &si)
-		unread = append(unread, si)
+		from = min(from, i)
 		through = r.ID
-		if si.Kind == "user" {
+		if items[i].Kind == "user" {
 			users++
 		}
 	}
@@ -177,7 +231,7 @@ func (rt *Runtime) reviewMemory(ctx context.Context, u *store.User) error {
 	if err != nil {
 		return err
 	}
-	transcript := newest(st.Pending+strings.Join(transcriptChunks(unread, 1<<30), ""), reviewMaxChars)
+	transcript := newest(st.Pending+reviewTranscript(items, from), reviewMaxChars)
 	t0 := time.Now()
 	ops, usage, err := rt.reviewCall(ctx, u, mems, transcript)
 	if ctx.Err() != nil {
@@ -250,7 +304,7 @@ var reviewSchema = map[string]any{
 
 // reviewPrompt is the review's instructions. {{NAME}} is the user's name.
 const reviewPrompt = `You look after the long-term memory that Alexa, a personal agent, keeps about {{NAME}}. Read the conversation since the last review and decide whether anything in it should be remembered in every future conversation. Most of the time nothing should: then return no operations.
-- Remember only facts grounded in the conversation: something {{NAME}} said, or something a page or file showed. Never infer their personality, mood, skills or tastes from a topic or a tone, and never turn a one-off request into a standing preference unless they marked it as general ("always", "from now on", "remember", "I hate…"). If you're unsure, leave it out: a wrong fact misleads every later conversation.
+- Remember only facts {{NAME}} stated or confirmed in their own messages and answers. What Alexa said, asked or showed is there for context: on its own it's never grounds for a memory. Never infer their personality, mood, skills or tastes from a topic or a tone, and never turn a one-off request into a standing preference unless they marked it as general ("always", "from now on", "remember", "I hate…"). If you're unsure, leave it out: a wrong fact misleads every later conversation.
 - Worth remembering: lasting personal details (the people in their life, home, sizes, diet), standing preferences, the sites and accounts they use, recurring commitments. Not worth it: details of today's task, things that change within weeks, what memory already says, and anything secret (passwords, codes, card or account numbers).
 - Write each entry as one short sentence stating a fact about {{NAME}} ("Likes a window seat"), never as an instruction ("Always book a window seat"), under 200 characters.
 - When a remembered fact is now wrong or superseded, use replace with the ids of the entries it supersedes. You may only replace entries marked (alexa) or (review), never (user). If memory would go over its budget, merge related (alexa) or (review) entries in the same answer.

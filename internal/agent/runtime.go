@@ -300,10 +300,14 @@ func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
 		}
 		return nil
 	}
-	if nd != nil && (kind == "schedule" || m.answersEarlier(nd)) {
+	if nd != nil && (kind == "schedule" || m.answersEarlier(nd) || m.Via == "report" && nd.Confirm) {
 		// A scheduled job never answers the question, and doesn't close
 		// it: it waits until the user answers, and runs after (M3). Nor
 		// does a late answer to a question they skipped earlier (FE-1).
+		// Nor does a message from a report when the question is a confirm
+		// card: what a report's button sends is up to the report, whatever
+		// the button showed, and a purchase, booking or message goes ahead
+		// only on the user's own answer, on the card or typed.
 		note := strings.Join(append(notes, "it came while your question was waiting"), ", ")
 		if err := rt.st.AddInbox(ctx, u.ID, store.InboxMessage{Kind: kind, Text: stamp(loc, note, said), Attachments: marshal(m.Attach)}); err != nil {
 			return err
@@ -487,7 +491,7 @@ func (rt *Runtime) HandBack(ctx context.Context, u *store.User, note string) err
 		var shot []byte
 		if tab := rt.peekTab(u.ID); tab != nil {
 			if st, err := tab.State(); err == nil {
-				answer += "\n\nCurrent browser state:\n" + st.Text
+				answer += handBackState + st.Text
 				shot = st.Screenshot
 			}
 		}
@@ -812,6 +816,10 @@ func (rt *Runtime) pendingNeeds(ctx context.Context, userID int64) *Needs {
 }
 
 func isMessage(kind string) bool { return kind == "user" || kind == "schedule" || kind == "system" }
+
+// handBackState heads the page state a hand-back's answer ends with; the
+// memory review reads the answer only up to it (reviewTranscript).
+const handBackState = "\n\nCurrent browser state:\n"
 
 // appendMessage adds a message from the user (or about them) to the
 // conversation.

@@ -17,8 +17,8 @@ import (
 )
 
 // Recall lets Alexa search what was said before the summary. Compaction
-// deletes the items it folds, so just before it does, the moments worth
-// finding again are copied into the store's recall index (beforeFold, afterFold):
+// deletes the items it folds, so in the same transaction the moments worth
+// finding again are copied into the store's recall index (beforeFold, keepFolded):
 // the user's messages and answers, scheduled jobs, and what Alexa said and
 // asked. Tool output isn't: page text is noise, and the likeliest carrier
 // of instructions that aren't the user's. Reports are indexed when they're
@@ -40,7 +40,7 @@ func recallKey(userID int64) string { return fmt.Sprintf("recall:%d", userID) }
 var stampRe = regexp.MustCompile(`^\[([A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d{4} \d{2}:\d{2})(?:, [^\]]*)?\]\s*`)
 
 // foldKeep is what's read of the conversation before a compaction deletes
-// the stretch it folds, so recall can keep it (beforeFold, afterFold).
+// the stretch it folds, so recall can keep it (beforeFold, keepFolded).
 type foldKeep struct {
 	since int64           // where the summary reached before
 	mark  int64           // the last item indexed so far
@@ -49,8 +49,8 @@ type foldKeep struct {
 	times map[int64]int64 // when the items were added, where known
 }
 
-// beforeFold reads what afterFold will need once the items folding now
-// (up to through) are gone: what an earlier compaction folded before
+// beforeFold reads what keepFolded needs of the items folding now (up to
+// through) and before them: what an earlier compaction folded before
 // recall kept anything (after the last item indexed, up to since, where
 // the summary reached before), if it's still there, and when each item
 // was added.
@@ -72,21 +72,24 @@ func (rt *Runtime) beforeFold(ctx context.Context, userID, since, through int64)
 	return k
 }
 
-// afterFold keeps what's needed of the stretch a compaction just folded
-// (rows and their items, now deleted from the store): its moments for
-// recall, with what beforeFold found older, and for the memory review the
-// part it hasn't read (noteFolded). The first time for a user, their
-// reports are indexed too. A failure only means less can be recalled, so
-// it's logged, not returned.
-func (rt *Runtime) afterFold(ctx context.Context, u *store.User, k foldKeep, rows []store.ItemRow, items []storedItem) {
+// keepFolded is what's kept of the stretch a compaction is folding (rows
+// and their items), for store.CompactSession to write in the transaction
+// that deletes them: their moments for recall, with what beforeFold found
+// older, and recall's new mark; and for the memory review the part it
+// hasn't read (foldedReview). The first time for a user, their reports are
+// indexed too.
+func (rt *Runtime) keepFolded(ctx context.Context, u *store.User, k foldKeep, rows []store.ItemRow, items []storedItem) store.Kept {
+	kept := store.Kept{KV: map[string]string{}}
 	if len(rows) == 0 {
-		return
+		return kept
 	}
-	rt.noteFolded(ctx, u.ID, k.since, rows, items)
-	var docs []store.RecallDoc
+	if key, v, ok := rt.foldedReview(ctx, u.ID, k.since, rows, items); ok {
+		kept.KV[key] = v
+	}
 	if k.first {
-		docs = append(docs, rt.reportDocs(ctx, u.ID)...)
+		kept.Recall = append(kept.Recall, rt.reportDocs(ctx, u.ID)...)
 	}
+	last := rows[len(rows)-1].ID
 	if len(k.older) > 0 {
 		olds := make([]storedItem, len(k.older))
 		for i, r := range k.older {
@@ -107,14 +110,11 @@ func (rt *Runtime) afterFold(ctx context.Context, u *store.User, k foldKeep, row
 		}
 		if d, ok := recallDoc(r.ID, items[i]); ok {
 			d.At = at
-			docs = append(docs, d)
+			kept.Recall = append(kept.Recall, d)
 		}
 	}
-	if err := rt.st.IndexRecall(ctx, u.ID, docs); err != nil {
-		slog.Warn("recall: index", "user", u.ID, "err", err)
-		return
-	}
-	_ = rt.st.SetKV(ctx, recallKey(u.ID), strconv.FormatInt(rows[len(rows)-1].ID, 10))
+	kept.KV[recallKey(u.ID)] = strconv.FormatInt(last, 10)
+	return kept
 }
 
 // recallDoc is what recall keeps of a conversation item, if anything.
