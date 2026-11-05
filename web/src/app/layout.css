@@ -259,9 +259,10 @@
 /* ---------- the home board's composer ---------- */
 /* With the board on its own, the composer sits in it, under the greeting
    (the board measures the slot into --home-bar). It's a little taller
-   there, and grows down into the board as the text grows. */
+   there, with the field centred in it, and grows down into the board as
+   the text grows. */
 .stage.home-centred { bottom: var(--composer-bottom); }
-.stage.home-placed ~ .bar.text { top: var(--home-bar); bottom: auto; height: max(64px, var(--composer-h)); }
+.stage.home-placed ~ .bar.text { top: var(--home-bar); bottom: auto; height: max(64px, var(--composer-h)); display: flex; flex-direction: column; justify-content: center; }
 /* The board shows what Alexa needs itself. */
 .stage.home-on ~ .needs-dock { display: none; }
 
