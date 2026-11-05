@@ -36,7 +36,12 @@ type Config struct {
 	ResendAPIKey    string
 	MailFrom        string
 	SecureCookies   bool
-	DevCORSOrigin   string
+	// TrustProxy takes a request's address from X-Real-IP: set it only
+	// behind a reverse proxy that overwrites the header and is the only
+	// way in. Sign-in limits are per address, so without it every visitor
+	// would share the proxy's.
+	TrustProxy    bool
+	DevCORSOrigin string
 	// TopicJudge lets the model decide whether a message carries on the
 	// topic on screen or starts a new one (agent/topic.go).
 	TopicJudge bool
@@ -100,6 +105,7 @@ func Load() *Config {
 		ResendAPIKey:    env("RESEND_API_KEY", ""),
 		MailFrom:        env("MAIL_FROM", ""),
 		SecureCookies:   envBool("SECURE_COOKIES", false),
+		TrustProxy:      envBool("TRUST_PROXY", false),
 		DevCORSOrigin:   env("DEV_CORS_ORIGIN", ""),
 		TopicJudge:      envBool("TOPIC_JUDGE", true),
 	}

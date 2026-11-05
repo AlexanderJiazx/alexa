@@ -178,7 +178,14 @@ func (l *limiter) allow(ip string) bool {
 	return true
 }
 
-func clientIP(r *http.Request) string {
+// clientIP is the address a request came from: the peer's, or behind a
+// trusted reverse proxy (TRUST_PROXY) the one it puts in X-Real-IP.
+func (s *Server) clientIP(r *http.Request) string {
+	if s.cfg.TrustProxy {
+		if ip := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); ip != nil {
+			return ip.String()
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -210,7 +217,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, signupClosed)
 		return
 	}
-	if !s.lim.allow(clientIP(r)) {
+	if !s.lim.allow(s.clientIP(r)) {
 		writeErr(w, http.StatusTooManyRequests, "too many attempts, try again later")
 		return
 	}
@@ -255,7 +262,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if !s.lim.allow(clientIP(r)) {
+	if !s.lim.allow(s.clientIP(r)) {
 		writeErr(w, http.StatusTooManyRequests, "too many attempts, try again later")
 		return
 	}

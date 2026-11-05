@@ -55,6 +55,16 @@ Browsers allow the microphone and Web Push only on `https://` or `localhost`. To
 
 On iPhone, open the site in Safari, then *Share → Add to Home Screen*. Then enable notifications in *Settings → Notifications*.
 
+Behind a reverse proxy, set `ALEXA_BIND=127.0.0.1:<port>` so Docker publishes the port on localhost only, and `TRUST_PROXY=true` so sign-in limits go by each visitor's address. The proxy must overwrite `X-Real-IP` with it and pass WebSocket upgrades on `/api/ws`.
+
+### Deploy on every push
+
+`.github/workflows/deploy.yml` deploys each push to `main`: a GitHub-hosted runner connects to the server over SSH and runs `scripts/deploy.sh` with the commit. The script checks it's on `main`, rebuilds the image and restarts Alexa, and puts the previous image back if the new one doesn't come up healthy. The workflow needs four repository secrets: `PI_DEPLOY_KEY` (a private key), `PI_DEPLOY_HOST` (`user@host`), `PI_DEPLOY_PORT` and `PI_KNOWN_HOSTS` (the server's host key line). On the server, give that key nothing but the script:
+
+```
+command="/home/you/alexa/scripts/deploy.sh",restrict ssh-ed25519 AAAA… alexa-deploy
+```
+
 ## Run it locally (development)
 
 ```bash

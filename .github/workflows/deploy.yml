@@ -1,0 +1,47 @@
+# Deploys main to the Pi on every push. A GitHub-hosted runner reaches the
+# Pi over SSH with a key whose only command is scripts/deploy.sh, which
+# builds that commit and rolls back if it doesn't come up healthy. Nothing
+# runs on the Pi for pull requests.
+#
+# Secrets: PI_DEPLOY_KEY (the private key), PI_DEPLOY_HOST (user@host),
+# PI_DEPLOY_PORT and PI_KNOWN_HOSTS (the host's key, so it's never taken on
+# trust). They stay secrets so the logs don't show where the Pi is.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, in order; a newer push replaces one still waiting.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: production
+      url: https://agent.alexanderjia.com
+    steps:
+      - name: Deploy on the Pi
+        env:
+          KEY: ${{ secrets.PI_DEPLOY_KEY }}
+          HOST: ${{ secrets.PI_DEPLOY_HOST }}
+          PORT: ${{ secrets.PI_DEPLOY_PORT }}
+          KNOWN_HOSTS: ${{ secrets.PI_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy -p "$PORT" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=10 "$HOST" "$GITHUB_SHA"
+
+      - name: Check the site
+        run: curl -fsS --retry 6 --retry-delay 5 --retry-all-errors -o /dev/null https://agent.alexanderjia.com/api/health
