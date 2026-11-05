@@ -1,0 +1,203 @@
+/* The needs-you cards (WP-10): the ask (a choice, a multi-select, a small
+   form, the confirm card), the sign-in and take-over cards, the dock above
+   the composer, and the cards for a failed or stopped run. */
+
+/* ---------- the card ---------- */
+.ask {
+  container-type: inline-size;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  padding: var(--s5) var(--s5) var(--s3);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  animation: pRise var(--d-3) var(--ease-out) both;
+}
+.ask > * { margin: 0; }
+.eyebrow { display: flex; align-items: center; gap: var(--s2); min-height: 20px; font: 500 var(--t-small) var(--font); color: var(--text-2); }
+.eyebrow svg.i { color: var(--text-3); }
+.eyebrow .mark { margin: 0 var(--s1) 0 3px; }
+.ask .eyebrow + .q { margin-top: calc(var(--s2) - var(--s4)); }
+.ask .q { font: 600 var(--t-title) var(--font); letter-spacing: var(--tr-title); color: var(--ink); text-wrap: pretty; overflow-wrap: anywhere; }
+
+/* ---------- a single choice ---------- */
+.ask-opts.pills { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.ask-opts.rows { display: flex; flex-direction: column; gap: var(--s2); }
+/* The group takes focus when a question arrives, for the number keys; it
+   draws no ring of its own (the arrows move a ring onto an option). */
+.ask-opts:focus { outline: none; }
+.ask-opt .kbd { margin-left: calc(-1 * var(--s1)); }
+.ask-opt.block { height: auto; min-height: 48px; padding: var(--s3) var(--s4); justify-content: flex-start; white-space: normal; text-align: left; }
+.ask-opt.block .ask-opt-label { flex: 1; min-width: 0; text-wrap: pretty; overflow-wrap: anywhere; }
+/* Alexa's pick: an ink ring and a quiet tag. Solid ink is only ever what
+   was chosen (here, in Reflect, and on a picked chip). */
+.ask-opt.rec { border-color: var(--ink); }
+.ask-opt .ask-rec { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 var(--s2); border-radius: var(--r-full); background: var(--tile); color: var(--text-2); font: 600 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); }
+.ask-opt.chosen { border-color: var(--ink); background-color: var(--ink); background-image: none; color: var(--on-ink); }
+@media (hover: hover) {
+  .ask-opt.chosen:hover { border-color: var(--ink); background-color: var(--ink); background-image: none; color: var(--on-ink); }
+}
+.ask-opt.chosen:disabled { opacity: 1; }
+
+/* ---------- multi-select ---------- */
+.ask-multi { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s3); }
+.ask-chips { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.chip .kbd { height: 18px; min-width: 18px; margin: 0 calc(-1 * var(--s1)) 0 var(--s2); }
+.chip[aria-pressed=true] .kbd { display: none; }
+
+/* ---------- a small form ---------- */
+.ask-form { display: flex; flex-direction: column; gap: var(--s4); }
+.ask-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
+@container (min-width: 440px) {
+  .ask-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ask-field.wide { grid-column: 1 / -1; }
+}
+.ask-field { min-width: 0; margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: var(--s2); }
+.ask-legend { display: block; padding: 0; font: 500 var(--t-small) var(--font); color: var(--text-2); }
+fieldset.ask-field > .ask-legend { margin-bottom: var(--s2); }
+.ask-field.toggle-row { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--s3); min-height: 44px; padding: 0 var(--s3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); }
+.ask-toggle-label { font: 500 var(--t-body) var(--font); color: var(--ink); }
+.ask-stepper { display: flex; align-items: center; justify-content: space-between; height: 44px; padding: 0 var(--s1); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); }
+.ask-stepper output { flex: 1; text-align: center; font: 600 var(--t-body) var(--font); color: var(--ink); }
+.ask-submit { display: flex; align-items: center; gap: var(--s3); }
+.ask-submit .kbd svg.i { stroke-width: 2; }
+.ask-sent { display: inline-flex; align-self: flex-start; align-items: center; gap: var(--s2); max-width: 100%; min-height: 32px; padding: var(--s1) var(--s3); border-radius: var(--r-full); background: var(--tile); font: 500 var(--t-small) var(--font); color: var(--ink-2); animation: pPop var(--d-2) var(--ease-out) both; }
+.ask-sent svg.i { color: var(--ok); }
+.ask-sent .spinner { width: 14px; height: 14px; }
+.ask-dropped { font: 400 var(--t-small) var(--font); color: var(--text-3); text-wrap: pretty; }
+.ask-err { display: flex; align-items: center; gap: var(--s2); font: 500 var(--t-small) var(--font); color: var(--bad); }
+.ask-err .linkish { color: inherit; }
+
+/* ---------- the confirm card ---------- */
+.ask.is-confirm .eyebrow { color: var(--ink); font-weight: 600; }
+.ask.is-confirm .eyebrow svg.i { color: var(--ink); }
+.cf-summary { display: flex; flex-direction: column; gap: var(--s3); }
+.cf-merchant { display: flex; align-items: center; gap: var(--s2); font: 600 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--ink); }
+.cf-lines { display: flex; flex-direction: column; gap: var(--s2); margin: 0; }
+.cf-line { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4); font: 400 var(--t-body) var(--font); letter-spacing: var(--tr-body); }
+.cf-line dt { min-width: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.cf-line dd { margin: 0; flex: none; max-width: 60%; color: var(--ink); text-align: right; overflow-wrap: anywhere; }
+/* The perforation: a dashed hairline above the total, like a ticket. */
+.cf-total { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4); margin: var(--s1) 0 0; padding-top: var(--s3); border-top: 1px dashed var(--line-strong); }
+.cf-total-label { font: 600 var(--t-small) var(--font); color: var(--text-2); }
+.cf-total-value { font: 600 var(--t-head) var(--font); letter-spacing: var(--tr-head); color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cf-cur { font: 600 var(--t-title) var(--font); letter-spacing: 0; color: var(--text-2); margin-right: 2px; }
+.cf-actions { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s1); }
+/* Each button says what it sends, in the model's words, so a long answer
+   wraps inside its button rather than running out of the card. */
+.cf-actions .btn { min-width: 0; max-width: 100%; height: auto; min-height: var(--h); padding-block: var(--s2); white-space: normal; text-wrap: balance; }
+.cf-actions .cf-primary { min-width: 160px; }
+@container (max-width: 420px) {
+  .cf-actions .cf-primary { flex: 1 0 100%; }
+  .cf-actions .cf-secondary, .cf-actions .cf-ghost { flex: 1 1 0; }
+}
+.cf-note { font: 400 var(--t-small) var(--font); color: var(--text-3); margin-top: calc(var(--s2) - var(--s4)); padding-bottom: var(--s2); }
+
+/* ---------- the footer: a hint, then Skip and Stop ---------- */
+.needs-foot { display: flex; align-items: center; gap: var(--s3); margin: 0 calc(-1 * var(--s5)); padding: var(--s3) var(--s3) 0 var(--s5); border-top: 1px solid var(--line); }
+.needs-hint { flex: 1; min-width: 0; margin: 0; font: 400 var(--t-small) var(--font); color: var(--text-3); text-wrap: pretty; }
+.needs-end { flex: none; margin-left: auto; display: flex; align-items: center; gap: var(--s1); }
+/* In a narrow card the hint takes its own line, so Skip for now and Stop
+   task keep their words without squeezing it into a column. */
+@container (max-width: 420px) {
+  .needs-foot:has(.needs-hint) { flex-wrap: wrap; row-gap: var(--s2); }
+  .needs-foot .needs-hint { flex-basis: 100%; }
+}
+
+/* ---------- compact: the dock's and the caption's copy ---------- */
+.ask.compact { gap: var(--s3); padding: 0; border: 0; border-radius: 0; background: none; animation: none; }
+.ask.compact .q { font: 600 var(--t-body) var(--font); letter-spacing: var(--tr-body); }
+.ask.compact .needs-foot { margin: 0; padding: var(--s2) 0 0; }
+.ask.compact .ask-opt.block { min-height: 40px; padding: var(--s2) var(--s3); }
+.ask.compact .cf-total-value { font: 600 var(--t-title) var(--font); }
+
+/* ---------- a question skipped for now, and asks in the past ---------- */
+.ask-later { display: flex; align-items: center; gap: var(--s2); margin: 0; font: 400 var(--t-small) var(--font); color: var(--text-3); }
+/* An ask no longer waiting (AnsweredAsk), on the main screen and in
+   Reflect alike: the choices it offered, the picked ones in solid ink with
+   a tick, then "You chose …". */
+.ask-past { display: flex; flex-direction: column; gap: var(--s3); }
+.ask-was { list-style: none; display: flex; flex-wrap: wrap; gap: var(--s2); margin: 0; padding: 0; }
+.ask-was li { display: inline-flex; align-items: center; gap: var(--s1); min-height: 32px; padding: var(--s1) var(--s3); border-radius: var(--r-full); border: 1px solid var(--line); font: 500 var(--t-small) var(--font); color: var(--text-3); overflow-wrap: anywhere; }
+.ask-was li.chosen { border-color: var(--ink); background: var(--ink); color: var(--on-ink); }
+.ask-unanswered { margin: 0; font: 400 var(--t-small) var(--font); color: var(--text-3); }
+
+/* ---------- take-over and sign-in ---------- */
+.ask .opts { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.ask-slot { align-self: stretch; display: flex; flex-direction: column; }
+.login-form .fields { display: flex; flex-direction: column; gap: var(--s2); }
+.login-form .save { display: flex; align-items: center; gap: var(--s3); font: 400 var(--t-body) var(--font); color: var(--ink); }
+.login-form .err { margin: 0; }
+.login-form .hint { display: flex; gap: var(--s2); align-items: flex-start; font: 400 var(--t-small) var(--font); color: var(--text-3); }
+.login-form .hint svg { margin-top: 2px; flex: none; }
+.site-name { color: var(--ink); font-weight: 600; }
+.caption.login-form .fields .field { flex: 1 1 160px; }
+
+/* ---------- the dock above the composer ---------- */
+.needs-dock {
+  --dock-w: min(var(--col-max, 680px), calc(100% - 2 * var(--side, var(--gutter))));
+  position: absolute;
+  z-index: var(--z-composer);
+  left: calc(50% - var(--dock-w) / 2);
+  width: var(--dock-w);
+  bottom: calc(var(--composer-bottom, var(--s6)) + var(--composer-h, 56px) + var(--s2));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  /* It waits a moment, so a card that's about to report itself on screen
+     doesn't flash the dock. */
+  animation: pRise var(--d-3) var(--ease-out) 160ms both;
+  transition: bottom var(--d-2) var(--ease-out), left var(--d-4) var(--ease-in-out), width var(--d-4) var(--ease-in-out);
+}
+.dock-row { display: flex; align-items: center; gap: var(--s3); min-height: 54px; padding: var(--s2) var(--s2) var(--s2) var(--s4); }
+.dock-row > .mark, .dock-row > svg.i { flex: none; }
+.dock-row > svg.i { color: var(--text-3); }
+.dock-text { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: var(--s2); padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.dock-label { flex: none; font: 600 var(--t-small) var(--font); color: var(--ink); }
+.dock-msg { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--text-2); }
+/* Open, the card says it all: the row keeps only its label and the close. */
+.needs-dock.open .dock-msg { display: none; }
+.dock-body { max-height: min(50vh, 440px); overflow-y: auto; overscroll-behavior: contain; padding: var(--s4); border-bottom: 1px solid var(--line); animation: pIn var(--d-2) var(--ease-out) both; }
+.dock-body .login-form { gap: var(--s3); }
+.app.voice .needs-dock { display: none; }
+@media (min-width: 900px) {
+  .stage.with-panel:not(.closing) ~ .needs-dock { --dock-w: var(--col-w); left: calc(100% - var(--side, var(--gutter)) - var(--col-w)); }
+}
+/* Under a panel on smaller screens the caption carries what Alexa needs. */
+@media (max-width: 899px) {
+  .stage.with-panel ~ .needs-dock { display: none; }
+}
+@media (max-width: 640px) {
+  .needs-dock { --dock-w: calc(100% - 2 * var(--s2)); }
+  .stage.with-browser ~ .needs-dock { display: flex; }
+  .dock-text { flex-direction: column; align-items: stretch; gap: 0; }
+}
+
+/* ---------- a run that went wrong, or was stopped ---------- */
+.fail { align-self: stretch; display: flex; gap: var(--s3); padding: var(--s4); border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line); animation: pRise var(--d-3) var(--ease-out) both; }
+.fail.past { background: none; animation: none; }
+.fail-ic { flex: none; width: 32px; height: 32px; border-radius: 50%; background: var(--bad-bg); color: var(--bad); display: flex; align-items: center; justify-content: center; }
+.fail-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--s1); padding-top: var(--s1); }
+.fail-main > * { margin: 0; }
+.fail-title { font: 600 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--ink); }
+.fail-body { font: 400 var(--t-small) var(--font); color: var(--text-2); text-wrap: pretty; overflow-wrap: anywhere; }
+.fail-actions { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }
+.fail-more { white-space: nowrap; }
+.fail-details { display: grid; gap: var(--s1); margin-top: var(--s2); padding: var(--s3); border-radius: var(--r-sm); background: var(--tile); font: 400 var(--t-small) var(--font); }
+.fail-details div { display: flex; gap: var(--s3); }
+.fail-details dt { flex: none; width: 76px; color: var(--text-3); }
+.fail-details dd { margin: 0; min-width: 0; color: var(--ink-2); overflow-wrap: anywhere; }
+.fail-details code { font: 400 var(--t-small) var(--font-mono); }
+.ask-stopped { align-self: center; display: inline-flex; align-items: center; gap: var(--s2); font: 400 var(--t-small) var(--font); color: var(--text-3); }
+.ask-stopped > svg.i { color: var(--text-3); }
+
+@media (max-width: 640px) {
+  .ask { padding: var(--s4) var(--s4) var(--s3); }
+  .ask .q { font: 600 var(--t-read) var(--font); letter-spacing: var(--tr-read); }
+  .needs-foot { margin: 0 calc(-1 * var(--s4)); padding-left: var(--s4); }
+}

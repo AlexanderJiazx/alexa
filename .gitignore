@@ -1,7 +1,9 @@
 bin/
 data/
 .env
-web/node_modules/
+node_modules/
 web/dist/*
 !web/dist/index.html
 .DS_Store
+.claude/settings.local.json
+.claude/hooks/deadline.lifted

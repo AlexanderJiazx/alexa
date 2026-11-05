@@ -1,0 +1,32 @@
+/* Sources (WP-04): the favicon stack under a message and its list. */
+
+.b-sources { position: relative; align-self: flex-start; margin-top: calc(-1 * var(--s2)); }
+.b-sources-btn { height: 32px; display: inline-flex; align-items: center; gap: var(--s2); padding: 0 var(--s3) 0 var(--s2); border: 1px solid var(--line); border-radius: var(--r-full); background: var(--surface); color: var(--text-2); font: 500 var(--t-small) var(--font); font-variant-numeric: tabular-nums; cursor: pointer; transition: color var(--d-1), border-color var(--d-1); }
+.b-sources-btn[aria-expanded=true] { color: var(--ink); border-color: var(--focus-line); }
+@media (hover: hover) {
+  .b-sources-btn:hover { color: var(--ink); border-color: var(--focus-line); }
+}
+.b-sources-btn:active { transform: scale(.97); }
+/* On touch, its target reaches 6px past its 32px, above and below. */
+@media (pointer: coarse) {
+  .b-sources-btn { position: relative; }
+  .b-sources-btn::after { content: ''; position: absolute; inset: -6px 0; }
+}
+.b-sources-btn .favicons > .favicon + .favicon { outline-color: var(--surface); }
+
+.b-sources-menu { left: 0; bottom: calc(100% + var(--s2)); width: min(360px, calc(100vw - 2 * var(--gutter))); max-height: min(400px, 60dvh); overflow-y: auto; transform-origin: bottom left; }
+.b-sources-menu.below { top: calc(100% + var(--s2)); bottom: auto; transform-origin: top left; }
+.b-sources-menu .b-source { height: auto; min-height: 52px; padding: var(--s2) var(--s3); text-decoration: none; }
+.b-source .favicon { flex: none; }
+.b-source-t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.b-source-t b { font: 500 var(--t-small) var(--font); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-source-t span { font: 400 var(--t-micro) var(--font); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-source > svg.i { flex: none; color: var(--text-3); }
+
+/* A bare link in a message, as a chip: icon, host, a short path. */
+.b-linkchip { display: inline-flex; align-items: center; gap: var(--s1); max-width: 100%; height: 26px; padding: 0 var(--s2) 0 6px; margin: 0 1px; border: 1px solid var(--line); border-radius: var(--r-full); background: var(--surface); color: var(--ink); font: 500 var(--t-small) var(--font); text-decoration: none; vertical-align: 1px; white-space: nowrap; transition: border-color var(--d-1); }
+@media (hover: hover) {
+  .b-linkchip:hover { border-color: var(--focus-line); }
+}
+.b-linkchip .h, .b-linkchip .p { overflow: hidden; text-overflow: ellipsis; }
+.b-linkchip .p { color: var(--text-3); font-weight: 400; }

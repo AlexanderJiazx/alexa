@@ -54,6 +54,12 @@ type Tab struct {
 
 	actMu sync.Mutex // serializes actions
 	busyN atomic.Int32
+
+	// bound is the agent's tool call using the tab (Bind). When it's cut
+	// short, by Stop, a new message or the user taking over, the tab's
+	// actions end at once instead of running out their timeouts.
+	boundMu sync.Mutex
+	bound   context.Context
 }
 
 const stealthJS = `
@@ -252,6 +258,20 @@ func (t *Tab) popClosed() {
 
 func (t *Tab) busy() bool { return t.busyN.Load() > 0 }
 
+// watched says whether someone has the tab's live view open.
+func (t *Tab) watched() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.subs) > 0
+}
+
+// popups is how many popups the tab follows: its pages past the first.
+func (t *Tab) popups() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return max(0, len(t.pages)-1)
+}
+
 func (t *Tab) close() {
 	t.mu.Lock()
 	pages := t.pages
@@ -300,13 +320,24 @@ func (t *Tab) publishFrame(data []byte) {
 func (t *Tab) Subscribe() (<-chan []byte, func()) {
 	ch := make(chan []byte, 2)
 	t.mu.Lock()
+	if t.pages == nil {
+		// Closed already (Chrome died just now): end the view at once, so
+		// it reconnects to the tab that replaces this one.
+		t.mu.Unlock()
+		close(ch)
+		return ch, func() {}
+	}
 	t.subs[ch] = struct{}{}
 	first := len(t.subs) == 1
-	last := t.lastFrame
-	t.mu.Unlock()
-	if last != nil {
-		ch <- last
+	// The last frame goes in while the lock is held: once it's let go the
+	// tab may close the channel, or frames may fill it.
+	if t.lastFrame != nil {
+		select {
+		case ch <- t.lastFrame:
+		default:
+		}
 	}
+	t.mu.Unlock()
 	if first {
 		t.restartCast()
 	}
@@ -355,12 +386,115 @@ func (t *Tab) restartCast() {
 	}
 }
 
+// ---------- cancelling the agent's actions ----------
+
+// ErrInterrupted is what an action returns when the agent's call it belongs
+// to was cut short (Bind). Its message says why when the call knows.
+var ErrInterrupted = errors.New("interrupted")
+
+// Bind ties the tab's actions to ctx, the agent's tool call, until release
+// is called: once ctx is done every action ends at once with
+// ErrInterrupted, wherever it is (navigating, waiting for the page to
+// settle, indexing it). One call uses the tab at a time. A person's input
+// in the live view goes through the same helpers, so it's refused too in
+// the moment the cut call takes to unwind; it can't race the agent's last
+// keystrokes that way.
+func (t *Tab) Bind(ctx context.Context) (release func()) {
+	t.boundMu.Lock()
+	t.bound = ctx
+	t.boundMu.Unlock()
+	return func() {
+		t.boundMu.Lock()
+		if t.bound == ctx {
+			t.bound = nil
+		}
+		t.boundMu.Unlock()
+	}
+}
+
+// Unbind lets go of a call that was cut short but hasn't returned yet (a
+// tool stuck somewhere that doesn't watch its context), so the person who
+// took the tab over isn't refused while it ends. A call that hasn't been
+// cut keeps its binding.
+func (t *Tab) Unbind() {
+	t.boundMu.Lock()
+	if t.bound != nil && t.bound.Err() != nil {
+		t.bound = nil
+	}
+	t.boundMu.Unlock()
+}
+
+func (t *Tab) boundCtx() context.Context {
+	t.boundMu.Lock()
+	defer t.boundMu.Unlock()
+	return t.bound
+}
+
+// cut returns the error to end an action with when the call it belongs to
+// was cut short, or nil.
+func (t *Tab) cut() error {
+	if b := t.boundCtx(); b != nil && b.Err() != nil {
+		return interrupted(b)
+	}
+	return nil
+}
+
+// interrupted is ErrInterrupted with the reason the call was cut, if it
+// was given one (context.Cause).
+func interrupted(ctx context.Context) error {
+	if c := context.Cause(ctx); c != nil && !errors.Is(c, context.Canceled) && !errors.Is(c, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w", ErrInterrupted, c)
+	}
+	return ErrInterrupted
+}
+
+// withBound derives a context from ctx that also ends when the bound call
+// does, for the few calls that run in a context of their own (a frame's).
+func (t *Tab) withBound(ctx context.Context) (context.Context, context.CancelFunc) {
+	c, cancel := context.WithCancel(ctx)
+	b := t.boundCtx()
+	if b == nil {
+		return c, cancel
+	}
+	stop := context.AfterFunc(b, cancel)
+	return c, func() { stop(); cancel() }
+}
+
+// pause waits d, or until the bound call is cut; it returns that cut.
+func (t *Tab) pause(d time.Duration) error {
+	b := t.boundCtx()
+	if b == nil {
+		time.Sleep(d)
+		return nil
+	}
+	tm := time.NewTimer(d)
+	defer tm.Stop()
+	select {
+	case <-tm.C:
+		return nil
+	case <-b.Done():
+		return interrupted(b)
+	}
+}
+
 // ---------- low level helpers ----------
 
 func (t *Tab) run(timeout time.Duration, actions ...chromedp.Action) error {
 	ctx, cancel := context.WithTimeout(t.active().ctx, timeout)
 	defer cancel()
-	return chromedp.Run(ctx, actions...)
+	b := t.boundCtx()
+	if b == nil {
+		return chromedp.Run(ctx, actions...)
+	}
+	if b.Err() != nil {
+		return interrupted(b)
+	}
+	defer context.AfterFunc(b, cancel)()
+	err := chromedp.Run(ctx, actions...)
+	if err != nil && b.Err() != nil {
+		return interrupted(b)
+	}
+	return err
 }
 
 // eval evaluates JS (retrying across navigations) and decodes into out.
@@ -379,7 +513,9 @@ func (t *Tab) eval(js string, out any) error {
 		}
 		msg := err.Error()
 		if strings.Contains(msg, "context was destroyed") || strings.Contains(msg, "Cannot find context") || strings.Contains(msg, "uniqueContextId") {
-			time.Sleep(500 * time.Millisecond)
+			if cut := t.pause(500 * time.Millisecond); cut != nil {
+				return cut
+			}
 			continue
 		}
 		return err
@@ -397,24 +533,27 @@ func (t *Tab) screenshot(quality int64) ([]byte, error) {
 	return buf, err
 }
 
-// settle waits briefly for the page to finish loading after an action.
+// settle waits briefly for the page to finish loading after an action. A
+// cut call stops waiting at once.
 func (t *Tab) settle() {
-	time.Sleep(350 * time.Millisecond)
+	if t.pause(350*time.Millisecond) != nil {
+		return
+	}
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
-		if t.pendingDialog() != nil {
+		if t.pendingDialog() != nil || t.cut() != nil {
 			return
 		}
 		var state string
-		ctx, cancel := context.WithTimeout(t.active().ctx, 2*time.Second)
-		err := chromedp.Run(ctx, chromedp.Evaluate(`document.readyState`, &state))
-		cancel()
+		err := t.run(2*time.Second, chromedp.Evaluate(`document.readyState`, &state))
 		if err == nil && state == "complete" {
 			break
 		}
-		time.Sleep(250 * time.Millisecond)
+		if t.pause(250*time.Millisecond) != nil {
+			return
+		}
 	}
-	time.Sleep(300 * time.Millisecond)
+	_ = t.pause(300 * time.Millisecond)
 }
 
 // glide is how long the pointer in the live view takes to travel dist
@@ -438,7 +577,7 @@ func (t *Tab) setCursor(x, y float64, click, wait bool) {
 	t.mu.Unlock()
 	t.b.emit(t.taskID, TabEvent{Type: "cursor", X: x, Y: y, Click: click})
 	if wait && watched {
-		time.Sleep(glide(dist))
+		_ = t.pause(glide(dist))
 	}
 }
 
@@ -460,6 +599,27 @@ func (t *Tab) mouseClick(x, y float64, button input.MouseButton, count int64) er
 }
 
 var errNoElement = errors.New("element not found; the page may have changed — get a fresh browser state and use a current index")
+
+// intoViewJS is a function that scrolls an element to the middle of the
+// screen, but only when the point the agent would click is off screen or
+// under something else (a sticky header, say). Scrolling one that's
+// already in view would move everything around it, and the rest of a batch
+// aimed at the page the model saw would be skipped as stale (H2): filling a
+// form would take a turn per field.
+const intoViewJS = `(el => {
+	const w = el.ownerDocument.defaultView, r = el.getBoundingClientRect();
+	const x = r.left + Math.min(r.width / 2, 120), y = r.top + r.height / 2;
+	let ok = r.width > 0 && r.height > 0 && x >= 0 && y >= 0 && x < w.innerWidth && y < w.innerHeight;
+	if (ok && window.__aaAbs) {
+		const a = window.__aaAbs(el), ax = a.x + Math.min(a.w / 2, 120), ay = a.y + a.h / 2;
+		ok = ax >= 0 && ay >= 0 && ax < innerWidth && ay < innerHeight;
+	}
+	if (ok) {
+		const root = el.getRootNode(), hit = (root.elementFromPoint ? root : el.ownerDocument).elementFromPoint(x, y);
+		ok = !!hit && (hit === el || el.contains(hit) || hit.contains(el));
+	}
+	if (!ok) el.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
+})`
 
 // elementCenter scrolls element [idx] into view and returns a click point in
 // page (top-level viewport) coordinates, following the element into whatever
@@ -483,12 +643,17 @@ func (t *Tab) elementCenter(idx int) (float64, float64, string, error) {
 	js := fmt.Sprintf(`(() => {
 		const el = (window.__aaEls||[])[%d];
 		if (!el || !el.isConnected) return {ok:false};
-		el.scrollIntoView({block:'center', inline:'center', behavior:'instant'});
+		%s(el);
 		const a = (window.__aaAbs || (e => { const r = e.getBoundingClientRect(); return {x:r.left,y:r.top,w:r.width,h:r.height}; }))(el);
 		return {ok:true, x:a.x, y:a.y, w:a.w, h:a.h, tag: el.tagName.toLowerCase() + (el.type ? ':' + el.type : '')};
-	})()`, r.local)
+	})()`, r.local, intoViewJS)
 	if r.frame != nil {
-		err = evalIn(r.frame.ctx, js, &res)
+		fctx, done := t.withBound(r.frame.ctx)
+		err = evalIn(fctx, js, &res)
+		done()
+		if cut := t.cut(); cut != nil {
+			err = cut
+		}
 	} else {
 		err = t.eval(js, &res)
 	}

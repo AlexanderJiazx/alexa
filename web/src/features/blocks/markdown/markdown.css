@@ -1,0 +1,9 @@
+/* Markdown (WP-04, reports only): prose between a report's blocks. It
+   takes the report's own prose styles (.prose, panels/report/report.css)
+   so it reads like the rest of the document; only its first heading
+   loses the rule and the space that open a new section, because the
+   block list already spaces it. */
+
+.prose.b-markdown > :first-child { margin-top: 0; }
+.prose.b-markdown > h2:first-child { padding-top: 0; border-top: 0; }
+.prose.b-markdown > :last-child { margin-bottom: 0; }

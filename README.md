@@ -12,9 +12,9 @@ There are no chats or tasks to manage. Each person has one conversation with Ale
 ## What it can do
 
 - **One conversation, forever.** When the prompt passes `COMPACT_TOKENS`, Alexa folds the older part into a structured summary and carries on. You can also do this on demand under *Settings → Conversation*. Lasting facts go to memory. Your feed keeps everything, so nothing is lost.
-- **The screen shows what's happening now.** The main screen holds only the current exchange: the request that set Alexa to work and everything since. A new request clears it, and a finished exchange you've seen is put away when you come back more than 30 minutes later (or tap the dot, top left). *Reflect* (the clock icon) is where the past lives: the whole conversation, every report and your files.
+- **The screen follows the topic.** The main screen holds the current topic: the request that set Alexa to work, everything since, and the earlier exchanges it carries on from. When you send a message while Alexa is idle, a quick model call decides whether it follows up on what's on screen (the screen keeps it) or starts something new (the screen starts clean); until it answers, the message shows under the current topic. A finished topic you've seen is put away when you come back more than 6 hours later (or tap the mark, top left), and the home screen shows: the greeting, the composer and recent finished work. *Reflect* (the clock icon) is where the past lives: the whole conversation, every report and your files. Set `TOPIC_JUDGE=false` to skip the call and start every request clean.
 - **Speaks only when it has something to say.** The model's own text and reasoning stay hidden. Alexa talks to you through a `say` tool, in one or two short sentences (it's told to stay under 300 characters, and anything over 400 is refused). Questions come through `ask`, with quick-reply buttons.
-- **Longer answers become reports.** Research, comparisons, itineraries and plans open on screen as a document. A report is markdown, or a sandboxed interactive HTML page for charts and the like. It comes with a download button and *Add to calendar* (.ics) when it has events. Every report is kept in *Reflect*.
+- **Longer answers become reports.** Research, comparisons, itineraries and plans open on screen as a document. A report is markdown, or a sandboxed interactive HTML page for charts and the like. A button on an HTML page can send your choice as a message, visibly, but it can never answer a confirmation: purchases, bookings and messages go ahead only on your own answer. It comes with a download button and *Add to calendar* (.ics) when it has events. Every report is kept in *Reflect*.
 - **The screen follows the agent.** While Alexa works in its browser, the live browser slides in beside the conversation, and Alexa's pointer glides to whatever it clicks before the page reacts. A new report opens by itself. If you choose what to look at during a request, it stops switching your screen until your next message. What's on screen is stored on the server, so every device you have open shows the same thing, and it's still there after a reload.
 - **Multi-step tasks in a real browser.** The agent sees each page as a numbered list of interactive elements plus an annotated screenshot, including what's inside embedded frames (same-site and cross-site, such as booking widgets and consent banners). It clicks, types, hovers, drags, scrolls, selects and uploads, and it follows popups and comes back when they close. Downloads land in `downloads/`, and the agent is told what each one saved; a download never replaces a file with the same name (it becomes `bill-2.pdf`). Date, time and slider fields get their values set directly. A page's confirm or prompt dialog waits for the agent to answer it instead of being clicked through.
 - **Take over.** Press *Take over* to drive the same browser yourself, then *Hand back*: click and scroll in it, type on your keyboard as you would on the page (on a phone, tap the keyboard button), or use the URL bar. Alexa asks for this when it hits a 2FA code, a CAPTCHA or payment details.
@@ -23,7 +23,7 @@ There are no chats or tasks to manage. Each person has one conversation with Ale
 - **Talk while it works.** Messages you send mid-job are picked up at its next step. A message also cuts short any wait in progress.
 - **Web search** with sources, plus `fetch_url` for quick reads.
 - **Files.** Attach files to a message; the agent reads images and PDFs directly. They keep their names, so a site Alexa uploads one to sees `lease.pdf`, not a made-up name. It can also look at images and PDF pages in its workspace, so it can check an image it generated or read a scanned document it downloaded. It can write files to your workspace, download files, and run shell commands in your private workspace: Python with pandas, matplotlib, openpyxl and python-docx, plus `pdftotext`, `tesseract` (OCR), `ffmpeg`, `jq` and `curl`.
-- **Memory.** It remembers facts about you; you can view and edit them under *Memory*.
+- **Memory.** It remembers facts about you; you can view and edit them under *Memory*. Every few of your messages (`MEMORY_REVIEW_EVERY`), while it's idle, one model call reads what you and Alexa said to each other and may save up to three lasting facts, shown as learned. It never reads page or file text for this, so a web page can't plant a "fact". A deleted entry can be restored for 30 days.
 - **Schedules.** Say "every weekday at 7:30, …" or "tomorrow at 9, …", or add one under *Scheduled*. A scheduled job arrives in the same conversation as a message from the scheduler. It works in the background: it doesn't switch your screen to the browser, and a job that has nothing to tell you (a price watch that found no drop) stays off the main screen, which keeps showing what you were looking at.
 - **Notifications:** Web Push (installable PWA) and, optionally, email via Resend. They are sent only when you don't have Alexa open on screen.
 - **Multiple users.** Each person gets their own conversation, memory, files, reports, schedules and Chrome profile, so cookies and logins stay separate. In the container, each user's Chrome and shell also run under their own Linux UID, so users can't read each other's files or the database. (Outside Docker, run as root with these UIDs, they must be able to reach their folders: every directory above `DATA_DIR` needs `o+x`, and Alexa won't start and says which ones if they don't.)
@@ -54,6 +54,16 @@ Browsers allow the microphone and Web Push only on `https://` or `localhost`. To
 - **Cloudflare Tunnel.**
 
 On iPhone, open the site in Safari, then *Share → Add to Home Screen*. Then enable notifications in *Settings → Notifications*.
+
+Behind a reverse proxy, set `ALEXA_BIND=127.0.0.1:<port>` so Docker publishes the port on localhost only, and `TRUST_PROXY=true` so sign-in limits go by each visitor's address. The proxy must overwrite `X-Real-IP` with it and pass WebSocket upgrades on `/api/ws`.
+
+### Deploy on every push
+
+`.github/workflows/deploy.yml` deploys each push to `main`: a GitHub-hosted runner connects to the server over SSH and runs `scripts/deploy.sh` with the commit. The script checks it's on `main`, rebuilds the image and restarts Alexa, and puts the previous image back if the new one doesn't come up healthy. The workflow needs four repository secrets: `PI_DEPLOY_KEY` (a private key), `PI_DEPLOY_HOST` (`user@host`), `PI_DEPLOY_PORT` and `PI_KNOWN_HOSTS` (the server's host key line). On the server, give that key nothing but the script:
+
+```
+command="/home/you/alexa/scripts/deploy.sh",restrict ssh-ed25519 AAAA… alexa-deploy
+```
 
 ## Run it locally (development)
 
@@ -86,6 +96,8 @@ Set these as environment variables (see `.env.example`):
 | `MODEL` | `muse-spark-1.3-contributor` | Agent model |
 | `REASONING_EFFORT` | `medium` | `minimal`/`low`/`medium`/`high` |
 | `COMPACT_TOKENS` | `120000` | Prompt size at which older conversation is folded into the summary |
+| `TOPIC_JUDGE` | `true` | A quick model call decides whether a message carries on the topic on screen; `false` starts every request clean |
+| `MEMORY_REVIEW_EVERY` | `8` | Your messages between idle-time memory reviews; `0` turns them off |
 | `ADDR` | `:8080` | Listen address |
 | `DATA_DIR` | `./data` | State directory |
 | `VAULT_KEY_FILE` | `DATA_DIR/vault.key` | Key for saved logins (32 bytes, base64); made if missing |

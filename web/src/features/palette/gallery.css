@@ -1,0 +1,4 @@
+/* The live chrome page (development only): the app in a frame as tall as a
+   laptop's screen, in the flow, so the gallery can size its frame to it. */
+.g-page:has(> .g-live) { padding: 0; }
+.g-live.app { height: 760px; min-height: 0; }

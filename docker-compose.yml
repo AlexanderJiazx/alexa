@@ -4,8 +4,10 @@ services:
     image: alexa:latest
     container_name: alexa
     restart: unless-stopped
+    # ALEXA_BIND (in .env) is where the host listens: 8080 on every
+    # interface by default, or 127.0.0.1:6035 behind a reverse proxy.
     ports:
-      - "8080:8080"
+      - "${ALEXA_BIND:-8080}:8080"
     env_file: .env
     environment:
       DATA_DIR: /data

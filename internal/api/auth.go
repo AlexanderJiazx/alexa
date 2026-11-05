@@ -35,6 +35,16 @@ func hashToken(tok string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// sessionHash is the token hash of the session the request was made with,
+// the key its sockets are registered under in the hub; "" without one.
+func sessionHash(r *http.Request) string {
+	c, err := r.Cookie(cookieName)
+	if err != nil || c.Value == "" {
+		return ""
+	}
+	return hashToken(c.Value)
+}
+
 func newToken() string {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
@@ -128,9 +138,13 @@ func hashPassword(pw string) (string, error) {
 
 // limiter is a small per-IP login attempt limiter.
 type limiter struct {
-	mu   sync.Mutex
-	hits map[string][]time.Time
+	mu    sync.Mutex
+	hits  map[string][]time.Time
+	swept time.Time // when addresses with no recent attempts were last dropped
 }
+
+// limitWindow is how far back the limiter counts attempts.
+const limitWindow = 10 * time.Minute
 
 func (l *limiter) allow(ip string) bool {
 	l.mu.Lock()
@@ -138,7 +152,18 @@ func (l *limiter) allow(ip string) bool {
 	if l.hits == nil {
 		l.hits = map[string][]time.Time{}
 	}
-	cut := time.Now().Add(-10 * time.Minute)
+	now := time.Now()
+	cut := now.Add(-limitWindow)
+	// Addresses that stopped trying are forgotten, so the map doesn't grow
+	// with every address that ever tried.
+	if now.Sub(l.swept) > limitWindow {
+		for k, ts := range l.hits {
+			if len(ts) == 0 || !ts[len(ts)-1].After(cut) {
+				delete(l.hits, k)
+			}
+		}
+		l.swept = now
+	}
 	var keep []time.Time
 	for _, t := range l.hits[ip] {
 		if t.After(cut) {
@@ -149,11 +174,18 @@ func (l *limiter) allow(ip string) bool {
 		l.hits[ip] = keep
 		return false
 	}
-	l.hits[ip] = append(keep, time.Now())
+	l.hits[ip] = append(keep, now)
 	return true
 }
 
-func clientIP(r *http.Request) string {
+// clientIP is the address a request came from: the peer's, or behind a
+// trusted reverse proxy (TRUST_PROXY) the one it puts in X-Real-IP.
+func (s *Server) clientIP(r *http.Request) string {
+	if s.cfg.TrustProxy {
+		if ip := net.ParseIP(strings.TrimSpace(r.Header.Get("X-Real-IP"))); ip != nil {
+			return ip.String()
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -173,17 +205,19 @@ type credsReq struct {
 	Timezone    string `json:"timezone"`
 }
 
+const signupClosed = "sign-up is closed; ask the admin for an account"
+
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	var req credsReq
 	if !readJSON(w, r, &req) {
 		return
 	}
-	n, _ := s.st.CountUsers(r.Context())
-	if n > 0 && !s.cfg.AllowSignup {
-		writeErr(w, http.StatusForbidden, "sign-up is closed; ask the admin for an account")
+	// A quick refusal before the work; SignUp decides for certain.
+	if n, _ := s.st.CountUsers(r.Context()); n > 0 && !s.cfg.AllowSignup {
+		writeErr(w, http.StatusForbidden, signupClosed)
 		return
 	}
-	if !s.lim.allow(clientIP(r)) {
+	if !s.lim.allow(s.clientIP(r)) {
 		writeErr(w, http.StatusTooManyRequests, "too many attempts, try again later")
 		return
 	}
@@ -197,7 +231,11 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	u, err := s.st.CreateUser(r.Context(), req.Username, hash, strings.TrimSpace(req.DisplayName), n == 0)
+	u, err := s.st.SignUp(r.Context(), req.Username, hash, strings.TrimSpace(req.DisplayName), s.cfg.AllowSignup)
+	if errors.Is(err, store.ErrSignupClosed) {
+		writeErr(w, http.StatusForbidden, signupClosed)
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusConflict, "that username is taken")
 		return
@@ -224,7 +262,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &req) {
 		return
 	}
-	if !s.lim.allow(clientIP(r)) {
+	if !s.lim.allow(s.clientIP(r)) {
 		writeErr(w, http.StatusTooManyRequests, "too many attempts, try again later")
 		return
 	}
@@ -247,9 +285,22 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(cookieName); err == nil {
-		_ = s.st.DeleteSession(r.Context(), hashToken(c.Value))
+	if h := sessionHash(r); h != "" {
+		_ = s.st.DeleteSession(r.Context(), h)
+		// The session's open sockets close with it, on every device.
+		s.hub.RevokeSession(h)
 	}
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// revokeUser signs the user out of every session but keep (a token hash;
+// "" signs them out everywhere) and closes those sessions' open sockets, so
+// another device goes back to sign-in at once instead of at its next ping.
+// It's for a password change (keep is the session that made it), an
+// admin's password reset and deleting the user.
+func (s *Server) revokeUser(ctx context.Context, userID int64, keep string) error {
+	err := s.st.DeleteOtherSessions(ctx, userID, keep)
+	s.hub.RevokeUser(userID, keep)
+	return err
 }

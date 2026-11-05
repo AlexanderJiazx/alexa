@@ -1,0 +1,200 @@
+/* The composer, attachment tray and voice (WP-10). Where it sits beside a
+   panel is the stage's business (app/layout.css). */
+
+/* The bar morphs between a text field and a round voice button. Its width
+   and left come from --bar-w. Only the morph animates them: docking under
+   the exchange column is a jump the stage turns into a slide by transform
+   (Stage.tsx), so the text inside doesn't reflow on every frame. Its
+   height is --composer-h, which the composer sets on the app as the text
+   grows, so the stage, the needs-you dock and the toasts make room by
+   construction. */
+.bar {
+  --bar-w: min(var(--col-max), calc(100% - 2 * var(--side, var(--gutter))));
+  position: absolute;
+  bottom: var(--composer-bottom);
+  left: calc(50% - var(--bar-w) / 2);
+  width: var(--bar-w);
+  z-index: var(--z-composer);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  transition:
+    left var(--d-4) var(--ease-in-out),
+    width var(--d-4) var(--ease-in-out),
+    height var(--d-4) var(--ease-in-out),
+    border-radius var(--d-4) var(--ease-in-out),
+    background-color var(--d-3) var(--ease-out),
+    border-color var(--d-2) var(--ease-out);
+}
+/* Growing a line is quicker than the morph. */
+.bar.text {
+  height: var(--composer-h);
+  border-radius: var(--r-lg);
+  transition:
+    height var(--d-2) var(--ease-out),
+    border-radius var(--d-4) var(--ease-in-out),
+    background-color var(--d-3) var(--ease-out),
+    border-color var(--d-2) var(--ease-out);
+}
+/* Back from voice, the disc opens out into the field. */
+.stage.morph ~ .bar.text {
+  transition:
+    left var(--d-4) var(--ease-in-out),
+    width var(--d-4) var(--ease-in-out),
+    height var(--d-2) var(--ease-out),
+    border-radius var(--d-4) var(--ease-in-out),
+    background-color var(--d-3) var(--ease-out),
+    border-color var(--d-2) var(--ease-out);
+}
+/* Focused, the frame darkens, as every control's does; nothing glows. */
+.bar.text:focus-within { border-color: var(--focus-line); }
+.bar.voice { --bar-w: 72px; height: 72px; border-radius: 36px; background: var(--ink); border-color: var(--ink); }
+
+/* Inside: the status line, the tray, then the row you type in. */
+.cmp { position: relative; display: flex; flex-direction: column; animation: pIn var(--d-3) 180ms both; }
+.cmp-row { display: flex; align-items: flex-end; gap: var(--s1); padding: 5px; }
+.cmp textarea { flex: 1; min-width: 0; height: 44px; margin: 0; padding: 11px var(--s2); border: 0; background: transparent; resize: none; overflow-y: hidden; color: var(--ink); font: 400 var(--t-body) var(--font); letter-spacing: var(--tr-body); caret-color: var(--ink); }
+.cmp textarea.scrolls { overflow-y: auto; }
+.cmp textarea:focus { outline: none; }
+/* An empty field keeps its invitation on one line, so a long one doesn't
+   make the composer taller on a phone. A textarea's placeholder can't end
+   in an ellipsis, so it's clipped without a scrollbar, and the composer
+   words it shorter on a phone. */
+.cmp textarea:placeholder-shown { white-space: nowrap; overflow-x: hidden; }
+.cmp textarea:disabled { opacity: .5; }
+/* Controls inside the bar follow its corners: 20 outer - 6 inset = 14. */
+.bar .icon-btn { border-radius: var(--r-md); }
+
+/* Attach. */
+.fb { position: relative; width: 44px; height: 44px; flex: none; border-radius: var(--r-md); display: flex; align-items: center; justify-content: center; color: var(--text-2); cursor: pointer; transition: background-color var(--d-1), color var(--d-1); }
+@media (hover: hover) {
+  .fb:hover { background: var(--hover); color: var(--ink); }
+}
+.fb:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* Send: a 36px ink circle inside a 44px target. It stays in place when
+   there's nothing to send, faded, so nothing jumps as you start typing. */
+.send { position: relative; width: 44px; height: 44px; flex: none; border: 0; padding: 0; border-radius: var(--r-full); background: transparent; color: var(--on-ink); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: opacity var(--d-1) var(--ease-out); }
+.send::before { content: ''; position: absolute; inset: 4px; border-radius: 50%; background: var(--ink); transition: transform var(--d-1) var(--ease-out), background-color var(--d-1); }
+.send svg { position: relative; }
+@media (hover: hover) {
+  .send:hover:not(:disabled)::before { background: var(--ink-hover); }
+}
+.send:active:not(:disabled)::before { transform: scale(.97); }
+.send:disabled { opacity: .3; cursor: default; }
+
+/* ---------- the status line: couldn't send, queued, seen, speaking ---------- */
+.receipt { display: flex; align-items: center; gap: var(--s2); min-height: 40px; padding: var(--s1) var(--s1) var(--s1) var(--s4); border-bottom: 1px solid var(--line); font: 500 var(--t-small) var(--font); color: var(--text-2); animation: pIn var(--d-2) var(--ease-out) both; }
+.receipt .btn.sm { --h: 30px; }
+.rc-ic { flex: none; width: 16px; display: flex; align-items: center; justify-content: center; color: var(--text-3); }
+.rc-ic .spinner { width: 14px; height: 14px; }
+.rc-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* With nothing to press at the end, the text keeps the same margin on both sides. */
+.rc-text:last-child { margin-right: calc(var(--s4) - var(--s1)); }
+.receipt.bad, .receipt.bad .rc-ic { color: var(--bad); }
+.receipt.ok .rc-ic { color: var(--ok); }
+.rc-x { flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: var(--r-full); background: transparent; color: var(--text-3); display: flex; align-items: center; justify-content: center; cursor: pointer; }
+@media (hover: hover) {
+  .rc-x:hover { background: var(--hover); color: var(--ink); }
+}
+/* A 44px target on touch screens. */
+@media (pointer: coarse) {
+  .rc-x { position: relative; }
+  .rc-x::after { content: ''; position: absolute; inset: -7px; }
+}
+.rc-short { display: none; }
+/* The long and short copy switch by the line's own width, not the
+   window's: docked beside a panel, the composer is a phone's width on a
+   desktop. Under 500px the long line and its long button don't fit. */
+.receipt { container-type: inline-size; }
+@container (max-width: 499px) {
+  .rc-long { display: none; }
+  .rc-short { display: inline; }
+}
+
+/* ---------- the attachment tray ---------- */
+.tray { list-style: none; display: flex; gap: var(--s2); margin: 0; padding: var(--s2) var(--s2) 0; overflow-x: auto; scrollbar-width: none; }
+.tray::-webkit-scrollbar { display: none; }
+.tray-item { position: relative; flex: none; height: 56px; display: flex; align-items: center; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); overflow: hidden; animation: pPop var(--d-2) var(--ease-out) both; }
+.tray-item.img { width: 56px; background: var(--tile); }
+.tray-item.img img { width: 100%; height: 100%; object-fit: cover; }
+.tray-item.busy.img img { opacity: .5; }
+.tray-file { display: grid; grid-template-columns: 32px minmax(0, 1fr); grid-template-rows: auto auto; column-gap: var(--s2); align-items: center; max-width: 220px; padding: 0 var(--s8) 0 var(--s3); }
+.tray-ic { grid-row: 1 / 3; width: 32px; height: 32px; border-radius: var(--r-xs); background: var(--tile); color: var(--text-2); display: flex; align-items: center; justify-content: center; }
+.tray-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 var(--t-small) var(--font); color: var(--ink); }
+.tray-meta { font: 400 var(--t-micro) var(--font); color: var(--text-3); }
+.tray-note { display: flex; align-items: flex-start; gap: var(--s2); margin: var(--s2) var(--s3) 0; font: 400 var(--t-small) var(--font); color: var(--text-2); }
+.tray-note > svg.i { flex: none; margin-top: 2px; color: var(--warn); }
+.tray-item.failed .tray-ic { background: var(--bad-bg); color: var(--bad); }
+.tray-item.failed .tray-meta { color: var(--bad); }
+.tray-item .spinner { position: absolute; right: var(--s3); top: calc(50% - 8px); width: 16px; height: 16px; }
+.tray-item.img .spinner { left: calc(50% - 8px); right: auto; }
+.tray-x { position: absolute; top: var(--s1); right: var(--s1); width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: var(--ink); color: var(--on-ink); display: flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0; transform: scale(.9); transition: opacity var(--d-1) var(--ease-out), transform var(--d-1) var(--ease-out); }
+.tray-x:focus-visible, .tray-item.failed .tray-x { opacity: 1; transform: none; }
+@media (hover: hover) {
+  .tray-item:hover .tray-x { opacity: 1; transform: none; }
+}
+@media (pointer: coarse) { .tray-x { opacity: 1; transform: none; } }
+
+/* ---------- key hints, just under the bar ---------- */
+.hint-row { position: absolute; top: calc(100% + 1px + var(--s1)); left: var(--s5); display: flex; gap: var(--s4); margin: 0; font: 400 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); white-space: nowrap; opacity: 0; transition: opacity var(--d-2) var(--ease-out); pointer-events: none; }
+.hint-row.on { opacity: 1; }
+.hint-row b { margin-right: 2px; font-weight: 600; color: var(--text-2); }
+@media (max-width: 640px), (pointer: coarse) { .hint-row { display: none; } }
+
+/* ---------- the header's connection pill ---------- */
+.conn-pill { display: inline-flex; margin-left: var(--s2); animation: pIn var(--d-2) var(--ease-out) both; }
+.conn-pill .spinner { width: 10px; height: 10px; border-width: 1.5px; }
+.conn-pill svg.i { stroke-width: 2; }
+
+/* Voice: the disc, its level bars, and the two small round buttons. */
+.disc { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; padding: 0; border-radius: inherit; background: transparent; color: var(--on-ink); display: flex; align-items: center; justify-content: center; gap: 4px; cursor: pointer; animation: pIn var(--d-2) 300ms both; }
+.disc span { width: 3px; border-radius: 2px; background: var(--on-ink); transition: height 90ms linear; }
+.voice-side { position: absolute; left: calc(50% - 104px); bottom: calc(var(--composer-bottom) + 14px); z-index: calc(var(--z-composer) + 1); width: 208px; height: 44px; display: flex; justify-content: space-between; pointer-events: none; animation: pIn var(--d-3) 380ms both; transition: left var(--d-4) var(--ease-in-out); }
+.voice-round { pointer-events: auto; width: 44px; height: 44px; padding: 0; border: 1px solid var(--line-strong); border-radius: 50%; background-color: var(--surface); color: var(--ink); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform var(--d-1) var(--ease-out), border-color var(--d-1); }
+@media (hover: hover) {
+  .voice-round:hover { border-color: var(--focus-line); }
+}
+.voice-round:active { transform: scale(.97); }
+
+/* What you're saying, just above the voice button; the latest words stay
+   in view and older ones fade out at the top. */
+.voice-tray {
+  --tray-w: min(var(--col-max), calc(100% - 2 * var(--gutter)));
+  position: absolute;
+  left: calc(50% - var(--tray-w) / 2);
+  width: var(--tray-w);
+  bottom: calc(var(--composer-bottom) + 72px + var(--s4));
+  z-index: calc(var(--z-composer) - 1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s2);
+  pointer-events: none;
+  animation: pRise var(--d-3) var(--ease-out) both;
+  transition: left var(--d-4) var(--ease-in-out), width var(--d-4) var(--ease-in-out);
+}
+.voice-tray .heard {
+  max-height: 84px;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  text-align: center;
+  font: 500 var(--t-title) var(--font);
+  letter-spacing: var(--tr-title);
+  text-wrap: balance;
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 34%);
+  mask-image: linear-gradient(to bottom, transparent, black 34%);
+}
+.voice-tray .heard.quiet { color: var(--text-2); -webkit-mask-image: none; mask-image: none; }
+.voice-tray .hint { font: 400 var(--t-small) var(--font); color: var(--text-3); text-align: center; }
+.saying { color: var(--text-3); }
+
+@media (max-width: 640px) {
+  .bar { --bar-w: calc(100% - 2 * var(--s2)); }
+  .bar.voice { --bar-w: 72px; }
+  /* Phones zoom into anything smaller than 16px while typing. */
+  .cmp textarea { font-size: 16px; }
+  .voice-tray { --tray-w: calc(100% - 2 * var(--gutter)); }
+}

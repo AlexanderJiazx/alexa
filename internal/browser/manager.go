@@ -6,14 +6,14 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/chromedp/cdproto/browser"
@@ -31,11 +31,21 @@ type Options struct {
 	// RestoreURL, if set, gives the last known URL of a user's tab so one
 	// recreated after a restart or idle shutdown reopens where it was.
 	RestoreURL func(userID int64, key string) string
+	// KeepAlive, if set, reports whether a user's browser must stay up
+	// however long it has been idle: the user is in control of it, or Alexa
+	// is waiting for them (a question, a take-over, a sign-in).
+	KeepAlive func(userID int64) bool
+	// Downloaded, if set, is called when a file a page downloaded has
+	// landed in the user's downloads folder.
+	Downloaded func(userID int64)
 }
 
 // UserEnv describes the on-disk environment of a user.
 type UserEnv struct {
-	UserID      int64
+	UserID int64
+	// Root is the user's own folder, which holds the others; the profile's
+	// parent if not given.
+	Root        string
 	ProfileDir  string
 	DownloadDir string
 	HomeDir     string
@@ -47,13 +57,17 @@ type Manager struct {
 	mu       sync.Mutex
 	browsers map[int64]*Browser
 	pending  map[int64]*pendingLaunch // launches in progress, so they don't block other users
+	removed  map[int64]bool           // deleted users: no browser starts for them again (Remove)
 	envFn    func(userID int64) UserEnv
 	onEvent  func(userID int64, taskID string, ev TabEvent)
 }
 
+// ErrRemoved is returned by Get for a user who has been deleted.
+var ErrRemoved = errors.New("this user has been deleted")
+
 // TabEvent is emitted for navigation/cursor changes so the UI can follow along.
 type TabEvent struct {
-	Type  string  `json:"type"` // nav | cursor | closed
+	Type  string  `json:"type"` // nav | cursor | closed | crashed
 	URL   string  `json:"url,omitempty"`
 	Title string  `json:"title,omitempty"`
 	X     float64 `json:"x,omitempty"`
@@ -62,22 +76,44 @@ type TabEvent struct {
 }
 
 func NewManager(opts Options, envFn func(int64) UserEnv, onEvent func(int64, string, TabEvent)) *Manager {
-	m := &Manager{opts: opts, browsers: map[int64]*Browser{}, pending: map[int64]*pendingLaunch{}, envFn: envFn, onEvent: onEvent}
+	m := &Manager{opts: opts, browsers: map[int64]*Browser{}, pending: map[int64]*pendingLaunch{}, removed: map[int64]bool{}, envFn: envFn, onEvent: onEvent}
 	go m.reaper()
 	return m
 }
 
 func (m *Manager) reaper() {
 	for range time.Tick(time.Minute) {
+		m.reap()
+	}
+}
+
+// reap closes the browsers no one has used for IdleAfter. One someone is
+// watching stays up (idleFor), and so does one the user must come back to
+// (KeepAlive): closing it would lose the page they're on, and an open live
+// view would only start it again, reloaded.
+func (m *Manager) reap() {
+	m.mu.Lock()
+	idle := map[int64]*Browser{}
+	for id, b := range m.browsers {
+		if b.idleFor() > m.opts.IdleAfter {
+			idle[id] = b
+		}
+	}
+	m.mu.Unlock()
+	for id, b := range idle {
+		if m.opts.KeepAlive != nil && m.opts.KeepAlive(id) {
+			continue
+		}
 		m.mu.Lock()
-		for id, b := range m.browsers {
-			if b.idleFor() > m.opts.IdleAfter {
-				slog.Info("closing idle browser", "user", id)
-				delete(m.browsers, id)
-				go b.Close()
-			}
+		still := m.browsers[id] == b && b.idleFor() > m.opts.IdleAfter
+		if still {
+			delete(m.browsers, id)
 		}
 		m.mu.Unlock()
+		if still {
+			slog.Info("closing idle browser", "user", id)
+			go b.Close()
+		}
 	}
 }
 
@@ -91,10 +127,20 @@ type pendingLaunch struct {
 // for the same user share one launch; other users are never blocked by it.
 func (m *Manager) Get(userID int64) (*Browser, error) {
 	m.mu.Lock()
-	if b, ok := m.browsers[userID]; ok && b.alive() {
-		b.touch()
+	if m.removed[userID] {
 		m.mu.Unlock()
-		return b, nil
+		return nil, ErrRemoved
+	}
+	if b, ok := m.browsers[userID]; ok {
+		if b.alive() {
+			b.touch()
+			m.mu.Unlock()
+			return b, nil
+		}
+		// Chrome died (the crash watch in launch closes it too): closing it
+		// ends its live views, which reconnect to the browser launched now.
+		delete(m.browsers, userID)
+		go b.Close()
 	}
 	if p, ok := m.pending[userID]; ok {
 		m.mu.Unlock()
@@ -109,10 +155,17 @@ func (m *Manager) Get(userID int64) (*Browser, error) {
 
 	m.mu.Lock()
 	delete(m.pending, userID)
-	if p.err == nil {
+	gone := p.err == nil && m.removed[userID]
+	if p.err == nil && !gone {
 		m.browsers[userID] = p.b
 	}
 	m.mu.Unlock()
+	if gone {
+		// Removed while it started: it goes at once, before Remove
+		// returns.
+		p.b.Close()
+		p.b, p.err = nil, ErrRemoved
+	}
 	close(p.done)
 	return p.b, p.err
 }
@@ -137,6 +190,21 @@ func (m *Manager) Existing(userID int64) *Browser {
 	return nil
 }
 
+// Remove closes a deleted user's browser for good: one being launched is
+// closed as soon as it's up, and none starts for them again, so nothing
+// makes their profile folder again once it's deleted. It returns once
+// their Chrome is gone.
+func (m *Manager) Remove(userID int64) {
+	m.mu.Lock()
+	m.removed[userID] = true
+	p := m.pending[userID]
+	m.mu.Unlock()
+	if p != nil {
+		<-p.done
+	}
+	m.CloseUser(userID)
+}
+
 func (m *Manager) CloseUser(userID int64) {
 	m.mu.Lock()
 	b := m.browsers[userID]
@@ -158,79 +226,64 @@ func (m *Manager) CloseAll() {
 }
 
 func (m *Manager) launch(env UserEnv) (*Browser, error) {
-	dirs := []string{env.ProfileDir, env.DownloadDir}
-	if env.HomeDir != "" {
-		dirs = append(dirs, filepath.Join(env.HomeDir, "tmp"))
+	if err := prepareDirs(env); err != nil {
+		return nil, err
 	}
-	for _, d := range dirs {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			return nil, err
-		}
-		if env.UID > 0 {
-			_ = os.Chown(d, env.UID, env.GID)
-		}
-	}
-	// A crashed Chrome leaves a lock that prevents relaunch with the same profile.
-	for _, f := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
-		_ = os.Remove(filepath.Join(env.ProfileDir, f))
-	}
-	opts := []chromedp.ExecAllocatorOption{
-		chromedp.NoFirstRun,
-		chromedp.NoDefaultBrowserCheck,
-		chromedp.UserDataDir(env.ProfileDir),
-		chromedp.WindowSize(m.opts.Width, m.opts.Height),
-		chromedp.Flag("disable-blink-features", "AutomationControlled"),
-		chromedp.Flag("disable-background-networking", false),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-features", "Translate,MediaRouter,OptimizationHints"),
-		chromedp.Flag("password-store", "basic"),
-		chromedp.Flag("lang", "en-US"),
-		chromedp.Flag("hide-scrollbars", false),
-		chromedp.Flag("mute-audio", true),
+	args := []string{
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--user-data-dir=" + env.ProfileDir,
+		fmt.Sprintf("--window-size=%d,%d", m.opts.Width, m.opts.Height),
+		"--disable-blink-features=AutomationControlled",
+		"--disable-dev-shm-usage",
+		"--disable-features=Translate,MediaRouter,OptimizationHints",
+		"--password-store=basic",
+		"--lang=en-US",
+		"--mute-audio",
 		// Every task has its own tab and most are "in the background";
 		// without these, input events wait on throttled frames.
-		chromedp.Flag("disable-background-timer-throttling", true),
-		chromedp.Flag("disable-backgrounding-occluded-windows", true),
-		chromedp.Flag("disable-renderer-backgrounding", true),
-		chromedp.Flag("disable-ipc-flooding-protection", true),
+		"--disable-background-timer-throttling",
+		"--disable-backgrounding-occluded-windows",
+		"--disable-renderer-backgrounding",
+		"--disable-ipc-flooding-protection",
 	}
 	if m.opts.Headless {
-		opts = append(opts, chromedp.Headless)
-	}
-	if m.opts.ChromePath != "" {
-		opts = append(opts, chromedp.ExecPath(m.opts.ChromePath))
+		args = append(args, "--headless", "--hide-scrollbars")
 	}
 	if os.Geteuid() == 0 || env.UID > 0 {
 		// Inside containers Chrome's own sandbox needs privileges we don't
 		// have; isolation between users comes from separate UIDs instead.
-		opts = append(opts, chromedp.NoSandbox)
+		args = append(args, "--no-sandbox")
 	}
-	if env.UID > 0 {
-		uid, gid, home := env.UID, env.GID, env.HomeDir
-		opts = append(opts, chromedp.ModifyCmdFunc(func(cmd *exec.Cmd) {
-			if cmd.SysProcAttr == nil {
-				cmd.SysProcAttr = &syscall.SysProcAttr{}
-			}
-			cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
-			cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+home+"/.config", "XDG_CACHE_HOME="+home+"/.cache", "TMPDIR="+home+"/tmp")
-		}))
+	proc, err := startChrome(chromePath(m.opts.ChromePath), append(args, "about:blank"), env)
+	if err != nil {
+		return nil, fmt.Errorf("launch chrome: %w", err)
 	}
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	rootCtx, rootCancel := chromedp.NewContext(allocCtx)
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(context.Background(), proc.url, chromedp.NoModifyURL)
+	// The root context is the tab Chrome opened with. Over a remote
+	// allocator chromedp would open a new one, which Chrome refuses until it
+	// has a window (firstPage).
+	rootCtx, rootCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(proc.page)))
 	if err := runWithTimeout(rootCtx, 45*time.Second); err != nil {
 		rootCancel()
 		allocCancel()
-		return nil, fmt.Errorf("launch chrome: %w", err)
+		proc.stop()
+		return nil, proc.errLaunch(err)
 	}
+	closeOtherPages(rootCtx)
 	b := &Browser{
 		mgr:         m,
 		env:         env,
+		chrome:      proc,
 		allocCancel: allocCancel,
 		rootCtx:     rootCtx,
 		rootCancel:  rootCancel,
 		tabs:        map[string]*Tab{},
 		last:        time.Now(),
 		downloads:   downloads{dir: env.DownloadDir},
+	}
+	if m.opts.Downloaded != nil {
+		b.downloads.done = func() { m.opts.Downloaded(env.UserID) }
 	}
 	// Normal Chrome user agent: many sites block "HeadlessChrome".
 	_ = chromedp.Run(rootCtx, chromedp.ActionFunc(func(ctx context.Context) error {
@@ -248,12 +301,20 @@ func (m *Manager) launch(env UserEnv) (*Browser, error) {
 	}
 	// Follow popups (when a page in one of our tabs opens a new window, the
 	// task's tab switches to it, and back when it closes) and note
-	// downloads.
+	// downloads. Popups are adopted one at a time, in the order they were
+	// opened, so one opened from a popup finds its opener already in the
+	// tab.
+	popups := make(chan *target.Info, 16)
+	go b.followPopups(popups)
 	chromedp.ListenBrowser(rootCtx, func(ev any) {
 		switch e := ev.(type) {
 		case *target.EventTargetCreated:
 			if e.TargetInfo.Type == "page" && e.TargetInfo.OpenerID != "" {
-				go b.adoptPopup(e.TargetInfo.TargetID, e.TargetInfo.OpenerID)
+				select {
+				case popups <- e.TargetInfo:
+				default: // a page opening windows faster than they're followed
+					go b.closeTarget(e.TargetInfo.TargetID)
+				}
 			}
 		case *target.EventTargetDestroyed:
 			go b.targetGone(e.TargetID)
@@ -261,13 +322,172 @@ func (m *Manager) launch(env UserEnv) (*Browser, error) {
 			b.downloads.event(e)
 		}
 	})
+	// chromedp only has the browser report new targets when it starts Chrome
+	// itself; over the pipe that's left to us, and without it no popup is
+	// ever followed.
+	if c := chromedp.FromContext(rootCtx); c != nil && c.Browser != nil {
+		if err := target.SetDiscoverTargets(true).Do(cdp.WithExecutor(rootCtx, c.Browser)); err != nil {
+			slog.Warn("popups won't be followed", "user", env.UserID, "err", err)
+		}
+	}
+	// chromedp ends the root context when Chrome goes away (it crashed, or
+	// was killed for memory). Closing the browser then closes its tabs and
+	// their live views, which reconnect, and the next Get launches a new
+	// one; without this a live view would show the last frame for good.
+	go func() {
+		<-rootCtx.Done()
+		b.mu.Lock()
+		crashed := !b.closed
+		keys := make([]string, 0, len(b.tabs))
+		for k := range b.tabs {
+			keys = append(keys, k)
+		}
+		b.mu.Unlock()
+		if !crashed {
+			return
+		}
+		slog.Warn("browser exited unexpectedly", "user", env.UserID)
+		for _, k := range keys {
+			b.emit(k, TabEvent{Type: "crashed"})
+		}
+		b.Close()
+	}()
 	slog.Info("browser launched", "user", env.UserID, "product", b.product)
 	return b, nil
+}
+
+// chromeEnv is the whole environment Chrome starts with (chromeCmd). It
+// inherits nothing else from the server: the model and mail API keys are in
+// the server's environment, and a page, a person in take-over, or the
+// user's shell (same UID) could read Chrome's from /proc/<pid>/environ.
+func chromeEnv(env UserEnv) []string {
+	// Under its own UID Chrome gets the user's home; otherwise the server's,
+	// as before.
+	home := os.Getenv("HOME")
+	if env.UID > 0 && env.HomeDir != "" {
+		home = env.HomeDir
+	}
+	vars := []string{"HOME=" + home}
+	if p := os.Getenv("PATH"); p != "" {
+		vars = append(vars, "PATH="+p)
+	} else {
+		vars = append(vars, "PATH=/usr/local/bin:/usr/bin:/bin")
+	}
+	if env.UID > 0 {
+		vars = append(vars, "XDG_CONFIG_HOME="+home+"/.config", "XDG_CACHE_HOME="+home+"/.cache", "TMPDIR="+home+"/tmp")
+	} else if t := os.Getenv("TMPDIR"); t != "" {
+		vars = append(vars, "TMPDIR="+t)
+	}
+	// Who and where (language, time zone), a display for a visible window,
+	// and the proxy the server itself goes through.
+	for _, k := range []string{"USER", "LOGNAME", "LANG", "LC_ALL", "LANGUAGE", "TZ", "DISPLAY", "XAUTHORITY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR",
+		"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"} {
+		if v, ok := os.LookupEnv(k); ok {
+			vars = append(vars, k+"="+v)
+		}
+	}
+	return vars
+}
+
+// prepareDirs makes the profile, download and temp folders plain folders
+// given to the user, and clears the lock a crashed Chrome leaves in the
+// profile (it would keep a new one from starting). The server runs as root
+// and the user's own processes own everything in their folder, so this
+// goes through an os.Root on that folder and never follows a link: one put
+// in place of a folder, or of one above it, would otherwise have root make,
+// give away or clear things wherever it led. Such a profile or download
+// folder is refused (userenv.Ensure, which runs first, moves it aside); a
+// temp folder that isn't plain only means Chrome's temporary files go
+// where the user's own UID can write anyway, so it isn't worth failing
+// over.
+func prepareDirs(env UserEnv) error {
+	top := env.Root
+	if top == "" {
+		top = filepath.Dir(env.ProfileDir)
+	}
+	// Its parents are the server's own.
+	if err := os.MkdirAll(top, 0o700); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(top)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	dirs := []string{env.ProfileDir, env.DownloadDir}
+	if env.HomeDir != "" {
+		dirs = append(dirs, filepath.Join(env.HomeDir, "tmp"))
+	}
+	for i, d := range dirs {
+		rel, err := filepath.Rel(top, d)
+		if err == nil && !filepath.IsLocal(rel) {
+			err = fmt.Errorf("the browser's %s folder isn't in the user's folder", filepath.Base(d))
+		}
+		if err == nil {
+			err = plainDir(root, rel, env.UID, env.GID)
+		}
+		if err != nil {
+			if i < 2 {
+				return err
+			}
+			slog.Warn("browser temp folder isn't a plain folder", "user", env.UserID, "path", d, "err", err)
+			continue
+		}
+		if i == 0 {
+			for _, f := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
+				_ = root.Remove(filepath.Join(rel, f))
+			}
+		}
+	}
+	return nil
+}
+
+// plainDir makes rel and each folder above it inside root a plain folder,
+// given to uid if it's set, refusing one that's a link or a file.
+func plainDir(root *os.Root, rel string, uid, gid int) error {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for i := range parts {
+		d := filepath.Join(parts[:i+1]...)
+		if err := root.Mkdir(d, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		if fi, err := root.Lstat(d); err != nil {
+			return err
+		} else if !fi.IsDir() {
+			return fmt.Errorf("the browser's %s folder isn't a plain folder (a link or a file is in its place), so it won't be used", filepath.ToSlash(d))
+		}
+		if uid > 0 {
+			_ = root.Lchown(d, uid, gid)
+		}
+	}
+	return nil
+}
+
+// closeOtherPages closes the blank window Chrome opens at start: the root
+// context has a page of its own.
+func closeOtherPages(rootCtx context.Context) {
+	c := chromedp.FromContext(rootCtx)
+	if c == nil || c.Browser == nil || c.Target == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(rootCtx, 5*time.Second)
+	defer cancel()
+	ex := cdp.WithExecutor(ctx, c.Browser)
+	infos, err := target.GetTargets().Do(ex)
+	if err != nil {
+		return
+	}
+	for _, ti := range infos {
+		if ti.Type == "page" && ti.TargetID != c.Target.TargetID {
+			_ = target.CloseTarget(ti.TargetID).Do(ex)
+		}
+	}
 }
 
 type Browser struct {
 	mgr         *Manager
 	env         UserEnv
+	chrome      *chrome
 	allocCancel context.CancelFunc
 	rootCtx     context.Context
 	rootCancel  context.CancelFunc
@@ -292,11 +512,13 @@ func (b *Browser) touch() {
 	b.mu.Unlock()
 }
 
+// idleFor is how long no one has used the browser: none while an action
+// is running or someone is watching a tab.
 func (b *Browser) idleFor() time.Duration {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, t := range b.tabs {
-		if t.busy() {
+		if t.busy() || t.watched() {
 			return 0
 		}
 	}
@@ -324,6 +546,9 @@ func (b *Browser) Close() {
 	}
 	b.rootCancel()
 	b.allocCancel()
+	if b.chrome != nil {
+		b.chrome.stop()
+	}
 }
 
 // Tab returns (creating if needed) the tab with the given key.
@@ -332,9 +557,15 @@ func (b *Browser) Tab(taskID string) (*Tab, error) {
 	b.opening.Lock()
 	defer b.opening.Unlock()
 	b.mu.Lock()
-	if t, ok := b.tabs[taskID]; ok && t.ctx.Err() == nil {
-		b.mu.Unlock()
-		return t, nil
+	if t, ok := b.tabs[taskID]; ok {
+		if t.ctx.Err() == nil {
+			b.mu.Unlock()
+			return t, nil
+		}
+		// A tab that died is replaced; closing it ends its live views, so
+		// they reconnect to the new one instead of showing the old frame.
+		delete(b.tabs, taskID)
+		go t.close()
 	}
 	b.mu.Unlock()
 	ctx, cancel := chromedp.NewContext(b.rootCtx)
@@ -368,26 +599,38 @@ func (b *Browser) PeekTab(taskID string) *Tab {
 	return nil
 }
 
-func (b *Browser) CloseTab(taskID string) {
-	b.mu.Lock()
-	t := b.tabs[taskID]
-	delete(b.tabs, taskID)
-	b.mu.Unlock()
-	if t != nil {
-		t.close()
+// maxPopups is how many popups a tab follows at once. A page that opens
+// window after window can't pile up renderers that way.
+const maxPopups = 5
+
+// followPopups adopts the popups the browser reports, one at a time.
+func (b *Browser) followPopups(popups <-chan *target.Info) {
+	for {
+		select {
+		case <-b.rootCtx.Done():
+			return
+		case ti := <-popups:
+			b.adoptPopup(ti.TargetID, ti.OpenerID)
+		}
 	}
 }
 
+// adoptPopup makes a popup the active page of the tab whose page opened it,
+// a popup of its own included. One no tab can follow (its opener is gone,
+// or the tab has as many as it follows) is closed: no one could see or
+// reach it, and it would run for as long as the browser does.
 func (b *Browser) adoptPopup(targetID, openerID target.ID) {
 	b.mu.Lock()
 	var owner *Tab
 	for _, t := range b.tabs {
-		if t.targetID() == openerID {
+		if t.ownsTarget(openerID) {
 			owner = t
 		}
 	}
 	b.mu.Unlock()
-	if owner == nil {
+	if owner == nil || owner.popups() >= maxPopups {
+		slog.Info("closing a popup no tab follows", "user", b.env.UserID, "opener", owner != nil)
+		b.closeTarget(targetID)
 		return
 	}
 	ctx, cancel := chromedp.NewContext(b.rootCtx, chromedp.WithTargetID(targetID))
@@ -400,6 +643,17 @@ func (b *Browser) adoptPopup(targetID, openerID target.ID) {
 		slog.Warn("adopt popup failed", "err", err)
 		cancel()
 	}
+}
+
+// closeTarget closes a page of the browser that no tab has.
+func (b *Browser) closeTarget(id target.ID) {
+	c := chromedp.FromContext(b.rootCtx)
+	if c == nil || c.Browser == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(b.rootCtx, 3*time.Second)
+	defer cancel()
+	_ = target.CloseTarget(id).Do(cdp.WithExecutor(ctx, c.Browser))
 }
 
 // targetGone drops a popup that closed (the page called window.close, say)

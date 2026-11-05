@@ -211,3 +211,23 @@ func TestHold(t *testing.T) {
 		t.Fatalf("after expiry: %+v %v", got, err)
 	}
 }
+
+// A deleted user's held logins are dropped at once (BH-5).
+func TestForget(t *testing.T) {
+	v, st, _ := openTest(t)
+	ctx := context.Background()
+	u, _ := st.CreateUser(ctx, "dan", "x", "Dan", false)
+	o, _ := st.CreateUser(ctx, "eve", "x", "Eve", false)
+	for _, id := range []int64{u.ID, o.ID} {
+		if err := v.Hold(id, "https://github.com/login", "someone", "held-pass"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v.Forget(u.ID)
+	if got, _, err := v.Pick(ctx, u.ID, "github.com", ""); err == nil && got != nil {
+		t.Errorf("a forgotten user's held login is still picked: %+v", got)
+	}
+	if got, _, err := v.Pick(ctx, o.ID, "github.com", ""); err != nil || got.Username != "someone" {
+		t.Errorf("another user's held login went too: %+v %v", got, err)
+	}
+}

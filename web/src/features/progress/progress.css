@@ -1,0 +1,255 @@
+/* Progress (WP-06): the RunCard with the plan, the working line, the
+   grouped steps and a finished run's summary.
+
+   Every line here shares one geometry: a 16px lead column (a glyph, a
+   favicon or Alexa's dot), an 8px gap, then the words, so the steps, the
+   working line and the plan all read down one edge at 24px. Lines are
+   13/18 with 5px above and below: 28px rows on the 4px grid. Numbers are
+   tabular and sit in a right column. Nothing washes on hover: the words
+   step up a tier, so nothing reaches past the column on a phone. */
+
+.steps-log { align-self: stretch; display: flex; flex-direction: column; min-width: 0; }
+
+/* ---------- lines: a group, a summary, a plan step ---------- */
+.pg-line,
+.pg-sum,
+.pg-earlier,
+.pc-main {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: auto;
+  align-items: start;
+  column-gap: var(--s2);
+  width: 100%;
+  min-height: 28px;
+  padding: 5px 0;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  text-align: left;
+  font: 400 var(--t-small) var(--font);
+  letter-spacing: 0;
+  color: var(--text-2);
+  transition: color var(--d-1) var(--ease-out);
+}
+button.pg-line, .pg-sum, .pg-earlier, button.pc-main { cursor: pointer; }
+@media (hover: hover) {
+  button.pg-line:hover, .pg-sum:hover, .pg-earlier:hover, button.pc-main:hover { color: var(--ink); }
+}
+.pg-ic { width: 16px; height: 18px; display: flex; align-items: center; justify-content: center; color: var(--text-3); }
+.pg-ic .favicon { --size: 16px; }
+.pg-text { min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.pg-site { font-weight: 500; color: var(--ink-2); }
+.pg-more, .pg-meta, .pg-tag { color: var(--text-3); }
+.pg-sep { padding: 0 1px; }
+/* Pinned to the line's top, 2px down, so the 14px icons centre on the
+   18px line without making it taller. */
+.pg-meta .pg-favs { margin: 2px var(--s1) 0 2px; vertical-align: top; }
+.pg-time { font: 500 var(--t-micro) var(--font); line-height: 18px; letter-spacing: var(--tr-micro); color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* The disclosure chevron: always on a summary, and on a group's line
+   while it's hovered, focused or open. */
+.pg-chev { display: flex; align-items: center; justify-content: center; width: 14px; height: 18px; color: var(--text-4); transition: transform var(--d-2) var(--ease-out), color var(--d-1), opacity var(--d-1); }
+.pg-chev.up { transform: rotate(180deg); }
+@media (hover: hover) {
+  .pg-sum:hover .pg-chev, .pc-main:hover .pg-chev, .pg-line:hover .pg-chev { color: var(--text-2); }
+}
+.pg-line .pg-chev { opacity: 0; }
+.pg-line:focus-visible .pg-chev, .pg-line[aria-expanded=true] .pg-chev { opacity: 1; }
+@media (hover: hover) {
+  .pg-line:hover .pg-chev { opacity: 1; }
+}
+/* Touch has no hover, so a group's line goes without its chevron (opening
+   it shows the steps), and its time ends at the column's edge. */
+@media (hover: none) { .pg-line .pg-chev { display: none; } }
+
+/* On touch, a line that opens something reaches 8px past its 28px, above
+   and below, for a 44px target. Lines that stack never take each other's
+   taps: the one below is drawn over the reach of the one above and gives
+   up its own reach upward, so the reach is only into the space around a
+   stack. The plan's last row stops at its edge, where the plan scrolls. */
+@media (pointer: coarse) {
+  .pg-line, .pg-sum, .pg-earlier, .pc-main { position: relative; }
+  :where(.pg-sum, .pg-earlier, .pg-group:not(.tight) > button.pg-line, button.pc-main)::after { content: ''; position: absolute; inset: -8px 0; }
+  .pg-group:not(:first-child) > .pg-line::after, .pg-groups .pg-line::after, .pc-main::after { top: 0; }
+  .pc-row:last-child > .pc-main:last-child::after { bottom: 0; }
+}
+
+/* ---------- a group opened: every step, on a thread ---------- */
+.pg-list { position: relative; padding: 0 0 var(--s1) 24px; animation: pIn var(--d-2) var(--ease-out) both; }
+.pg-list::before { content: ''; position: absolute; left: 7.5px; top: 2px; bottom: var(--s2); width: 1px; background: var(--line-strong); }
+.pg-list ol, .pg-fails { list-style: none; margin: 0; padding: 0; }
+.pg-fails { padding-left: 24px; }
+.pg-item { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: var(--s2); padding: 3px 0; font: 400 var(--t-small) var(--font); color: var(--text-2); }
+.pg-item .pg-text { display: block; overflow: visible; }
+.pg-item.failed .pg-text { color: var(--ink-2); }
+.pg-item.skipped .pg-text, .pg-item.interrupted .pg-text { color: var(--text-3); }
+/* A failed step's error reads as a note under it: honest, not alarming. */
+.pg-err { display: block; margin-top: 2px; font: 400 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); }
+.pg-fails.errs { padding: 0 0 var(--s1) 24px; margin-top: -3px; }
+.pg-o-failed .pg-err, .pg-fails.errs .pg-err { color: var(--bad); }
+
+.pg-sources { list-style: none; display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); margin: var(--s1) 0 var(--s1); padding: 0; }
+.pg-sources a { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; font: 500 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-2); text-decoration: none; }
+@media (hover: hover) {
+  .pg-sources a:hover { color: var(--ink); text-decoration: underline; }
+}
+/* Memory and schedule steps are chips, under the words' edge. */
+.pg-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: var(--s1) 0 var(--s1) 24px; }
+.pg-chip { max-width: 100%; }
+.pg-chip svg.i { color: var(--text-3); }
+.pg-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- live steps ---------- */
+.pg-live .pg-group { animation: pRise var(--d-3) var(--ease-out) both; }
+.pg-earlier { color: var(--text-3); }
+.pg-dots { width: 14px; height: 2px; border-radius: var(--r-full); background: radial-gradient(circle, currentColor 1px, transparent 1.5px) 0 0 / 5px 2px repeat-x; }
+
+/* ---------- a finished run, folded ---------- */
+.pg-sum { font-weight: 500; color: var(--text-3); }
+.pg-sum .pg-favs { margin: 2px 0 0 var(--s2); vertical-align: top; }
+.pg-o-failed .pg-sum, .pg-o-stopped .pg-sum { color: var(--text-2); }
+@media (hover: hover) {
+  .pg-o-failed .pg-sum:hover, .pg-o-stopped .pg-sum:hover { color: var(--ink); }
+}
+.pg-groups { padding-left: 0; animation: pIn var(--d-2) var(--ease-out) both; }
+
+/* ---------- glyphs ---------- */
+.pg-g { display: block; }
+.pg-g .fill { fill: currentColor; stroke: none; }
+.pg-g-pending { color: var(--text-4); }
+.pg-g-active { color: var(--ink); }
+.pg-g-active .core { fill: currentColor; stroke: none; transform-box: fill-box; transform-origin: center; animation: pBreath 2.4s ease-in-out infinite; }
+.pg-g-done { color: var(--text-3); }
+.pg-g-done .knock { stroke: var(--on-ink); stroke-width: 1.6; }
+.pg-g-failed { color: var(--bad); }
+.pg-g-skipped, .pg-g-interrupted, .pg-g-stopped, .pg-g-open { color: var(--text-3); }
+.pg-g-ok { color: var(--text-3); stroke-width: 1.75; }
+.pg-g-pie { color: var(--text-2); }
+.pg-g-pie .wedge { fill: none; stroke: currentColor; stroke-width: 4.5; stroke-linecap: butt; }
+
+/* ---------- the working line ---------- */
+.working { display: flex; flex-direction: column; opacity: 0; transition: opacity var(--d-3) var(--ease-out); }
+.working.shown { opacity: 1; }
+/* Everything sits on the headline's first line, a 32px band, so a headline
+   that wraps on a phone keeps Alexa's dot, the time and Stop beside its
+   start. */
+.pg-wl { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; align-items: start; column-gap: var(--s2); min-height: 32px; }
+.pg-wl > .pg-ic { height: 32px; }
+.pg-headline { min-width: 0; padding: 5px 0; font: 500 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--ink); overflow-wrap: anywhere; animation: pIn var(--d-3) var(--ease-out) both; }
+.working.control .pg-headline { color: var(--text-2); }
+/* The time ends where the steps' times do, a chevron's width and a gap
+   in from the column's edge. */
+.pg-elapsed { padding-right: calc(14px + var(--s2)); font: 500 var(--t-micro) var(--font); line-height: 32px; letter-spacing: var(--tr-micro); color: var(--text-3); }
+.pg-acts { display: flex; align-items: center; gap: 2px; height: 32px; }
+.pg-sub { display: flex; align-items: center; flex-wrap: wrap; column-gap: 6px; min-height: 20px; padding-left: 24px; font: 400 var(--t-small) var(--font); color: var(--text-3); animation: pIn var(--d-3) var(--ease-out) both; }
+.pg-sub .pg-site { color: var(--text-2); }
+.pg-sub-label { min-width: 0; overflow-wrap: anywhere; }
+.pg-count { color: var(--text-3); }
+
+/* The working line's Stop never hides: it's how you halt Alexa mid-act.
+   At rest it's quiet, and it comes up to ink under the pointer. The
+   RunCard's is a second way, so it waits for the pointer where there is
+   one; on touch the working line's is the one. */
+.pg-stop { color: var(--text-3); }
+.pg-stop:focus-visible { color: var(--ink); }
+@media (hover: hover) {
+  .pg-stop:hover:not(:disabled) { color: var(--ink); }
+}
+@media (hover: hover) and (pointer: fine) {
+  .rc-stop { opacity: 0; transition: opacity var(--d-1) var(--ease-out); }
+  .run-card:hover .rc-stop, .run-card:focus-within .rc-stop { opacity: 1; }
+}
+
+@media (hover: none), (pointer: coarse) { .rc-stop { display: none; } }
+/* ...and the working line's time ends at the edge with the steps' times. */
+@media (hover: none) { .pg-elapsed { padding-right: 0; } }
+.pg-stop-icon { display: none; }
+.pg-stop-glyph .fill { fill: currentColor; stroke: none; }
+@media (max-width: 640px) {
+  .pg-stop { display: none; }
+  .pg-stop-icon { display: inline-flex; }
+  .pg-acts { margin-right: -4px; }
+}
+
+/* What's being written, in its shape, while it's written. */
+.pg-skel { margin-top: var(--s3); animation: pIn var(--d-3) var(--ease-out) both; }
+.pg-skel-say { max-width: min(88%, 520px); }
+.pg-skel-ask { display: flex; flex-direction: column; gap: var(--s3); max-width: 520px; }
+.pg-skel-row { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.pg-skel-report { display: flex; align-items: center; gap: var(--s3); max-width: 360px; padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r-md); }
+.pg-skel-lines { flex: 1; display: flex; flex-direction: column; gap: var(--s2); }
+
+.pg-headline.shimmer { animation: pShimmer 2.2s linear infinite, pIn var(--d-3) var(--ease-out) both; }
+
+/* ---------- the RunCard ---------- */
+/* It heads the exchange column: the auto margin pushes it to the top while
+   the messages stay by the composer, and it sticks there as they scroll. */
+.run-card {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: none;
+  margin-bottom: auto;
+  padding: var(--s3) var(--s4) 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  animation: pRise var(--d-3) var(--ease-out) both;
+}
+.run-card.leaving { animation: pOut var(--d-2) var(--ease-out) both; }
+.run-card.folded { padding-bottom: 6px; }
+.rc-head { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr); grid-auto-flow: column; grid-auto-columns: auto; align-items: center; column-gap: var(--s2); min-height: 24px; color: var(--ink); }
+/* The toggle lies under the whole head, a little past it, so the head is
+   one target; Stop sits above it. Below, it stops where a folded card's
+   row begins (4px down), so a tap on the row is the row's. */
+.rc-toggle { position: absolute; inset: -6px -8px -4px; padding: 0; border: 0; border-radius: var(--r-sm); background: none; cursor: pointer; }
+.rc-head > :not(.rc-toggle) { pointer-events: none; }
+.rc-head .pg-ic { height: 24px; }
+.rc-head .pg-chev { height: 24px; }
+@media (hover: hover) {
+  .rc-head:hover .pg-chev { color: var(--text-2); }
+}
+.rc-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 var(--t-small) var(--font); }
+.rc-count { font: 500 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); white-space: nowrap; }
+.rc-head > .rc-stop { position: relative; pointer-events: auto; margin: -4px 0; }
+.rc-needs { display: inline-flex; align-items: center; gap: 6px; font: 500 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-2); white-space: nowrap; }
+
+.pc-rows { list-style: none; margin: var(--s2) 0 0; padding: 0; display: flex; flex-direction: column; }
+.run-card.open .pc-rows { max-height: 50dvh; overflow-y: auto; overscroll-behavior: contain; }
+.run-card.folded .pc-rows { margin-top: var(--s1); }
+.pc-row { position: relative; }
+/* The thread between the steps' glyphs; the part already walked is a
+   shade darker. */
+.pc-row:not(:last-child)::before { content: ''; position: absolute; left: 7.5px; top: 24px; bottom: -4px; width: 1px; background: var(--line-strong); }
+.pc-row.done:not(:last-child)::before { background: var(--text-4); }
+.pc-text { min-width: 0; overflow-wrap: anywhere; }
+.pc-row.done .pc-main { color: var(--text-2); }
+.pc-row.active .pc-main { color: var(--ink); font-weight: 500; }
+.pc-row.pending .pc-main { color: var(--text-3); }
+.pc-row.failed .pc-main { color: var(--ink-2); }
+.pc-row.skipped .pc-main { color: var(--text-3); }
+.pc-meta { display: inline-flex; align-items: center; gap: var(--s2); height: 18px; }
+.pc-time { font: 500 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); line-height: 18px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.pc-note { display: block; margin: -3px 0 0; padding: 0 0 var(--s1) 24px; font: 400 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); }
+.pc-note.bad { color: var(--bad); }
+/* The work under a plan step: its group lines, a tier quieter. */
+.pc-work { padding: 0 0 var(--s1) 24px; animation: pIn var(--d-2) var(--ease-out) both; }
+.pg-group.tight .pg-line { min-height: 24px; padding: 3px 0; color: var(--text-3); }
+.pg-group.tight .pg-site { color: var(--text-2); }
+@media (hover: hover) {
+  .pg-group.tight button.pg-line:hover { color: var(--ink); }
+}
+.pc-earlier { display: block; padding: 3px 0 3px 24px; font: 400 var(--t-small) var(--font); color: var(--text-3); }
+.rc-note { margin: var(--s1) 0 var(--s1) 24px; font: 400 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); }
+
+/* The plan, once the run is over: a quiet line that opens to the list. */
+.pg-plan .pc-rows { margin: 0 0 var(--s1); animation: pIn var(--d-2) var(--ease-out) both; }
+
+/* On a phone the open card, head and all, stays within 40% of the
+   screen; its steps scroll inside it. */
+@media (max-width: 640px) {
+  .run-card { padding: var(--s3) var(--s3) 6px; }
+  .run-card.open .pc-rows { max-height: calc(40dvh - 56px); }
+}

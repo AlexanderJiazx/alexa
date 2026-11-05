@@ -42,6 +42,7 @@ func (s *Server) handleAddLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, err.Error())
 		return
 	}
+	s.changed(r, "logins")
 	writeJSON(w, l)
 }
 
@@ -60,6 +61,7 @@ func (s *Server) handleUpdateLogin(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		writeErr(w, 400, err.Error())
 	default:
+		s.changed(r, "logins")
 		writeJSON(w, l)
 	}
 }
@@ -75,6 +77,7 @@ func (s *Server) handleDeleteLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "login not found")
 		return
 	}
+	s.changed(r, "logins")
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
@@ -88,6 +91,10 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	if err := s.rt.SignIn(r.Context(), userFrom(r), req.Username, req.Password, req.Save); err != nil {
 		sessionErr(w, err)
 		return
+	}
+	if req.Save {
+		// Kept in the vault, so the Logins sheet lists it.
+		s.changed(r, "logins")
 	}
 	writeJSON(w, map[string]bool{"ok": true})
 }

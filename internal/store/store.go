@@ -77,7 +77,8 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(8)
-	if _, err := db.Exec(schema + sessionSchema + loginSchema); err != nil {
+	if err := migrate(context.Background(), db); err != nil {
+		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return &Store{db: db}, nil
@@ -137,6 +138,55 @@ func (s *Store) CreateUser(ctx context.Context, username, hash, display string, 
 	return s.GetUser(ctx, id)
 }
 
+// ErrSignupClosed is returned by SignUp when there are users already and
+// anyone else may not sign up.
+var ErrSignupClosed = errors.New("sign-up is closed")
+
+// SignUp creates an account from the sign-up page. The first one is the
+// admin; after it, one is made only if open. The count and the insert are
+// one transaction, holding the write lock throughout, so two people
+// signing up at once to a new server can't both become admin, and neither
+// gets in once the first has closed sign-up behind them.
+func (s *Store) SignUp(ctx context.Context, username, hash, display string, open bool) (*User, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var n int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n); err != nil {
+		return nil, err
+	}
+	if n > 0 && !open {
+		return nil, ErrSignupClosed
+	}
+	admin := 0
+	if n == 0 {
+		admin = 1
+	}
+	res, err := tx.ExecContext(ctx, `INSERT INTO users(username, password_hash, display_name, is_admin, created_at) VALUES(?,?,?,?,?)`, username, hash, display, admin, now())
+	if err != nil {
+		return nil, err
+	}
+	id, _ := res.LastInsertId()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.GetUser(ctx, id)
+}
+
+// LastUserID is the highest id ever given a user, deleted or not: ids
+// aren't reused (AUTOINCREMENT), so a user made after this is read has a
+// higher one.
+func (s *Store) LastUserID(ctx context.Context) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT seq FROM sqlite_sequence WHERE name='users'`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
+}
+
 func (s *Store) GetUser(ctx context.Context, id int64) (*User, error) {
 	return scanUser(s.db.QueryRowContext(ctx, `SELECT `+userCols+` FROM users WHERE id=?`, id))
 }
@@ -174,6 +224,12 @@ func (s *Store) UpdateUserPassword(ctx context.Context, id int64, hash string) e
 
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	// Per-user kv entries are keyed "<what>:<user id>" (the agent's plan,
+	// prune marks and resume flags) and have no foreign key to cascade.
+	_, err = s.db.ExecContext(ctx, `DELETE FROM kv WHERE key LIKE '%:' || ?`, fmt.Sprint(id))
 	return err
 }
 
@@ -194,58 +250,11 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
 	return err
 }
 
-func (s *Store) DeleteUserSessions(ctx context.Context, userID int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE user_id=?`, userID)
+// DeleteOtherSessions signs a user out everywhere except the session whose
+// token hash is keep, in one statement, so that one is never missing.
+func (s *Store) DeleteOtherSessions(ctx context.Context, userID int64, keep string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM auth_sessions WHERE user_id=? AND token_hash<>?`, userID, keep)
 	return err
-}
-
-// ---------- memories ----------
-
-type Memory struct {
-	ID        int64  `json:"id"`
-	Content   string `json:"content"`
-	CreatedAt int64  `json:"createdAt"`
-}
-
-func (s *Store) AddMemory(ctx context.Context, userID int64, content string) (*Memory, error) {
-	m := &Memory{Content: content, CreatedAt: now()}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO memories(user_id, content, created_at) VALUES(?,?,?)`, userID, content, m.CreatedAt)
-	if err != nil {
-		return nil, err
-	}
-	m.ID, _ = res.LastInsertId()
-	return m, nil
-}
-
-func (s *Store) Memories(ctx context.Context, userID int64) ([]*Memory, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, content, created_at FROM memories WHERE user_id=? ORDER BY id`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Memory
-	for rows.Next() {
-		var m Memory
-		if err := rows.Scan(&m.ID, &m.Content, &m.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, &m)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) UpdateMemory(ctx context.Context, userID, id int64, content string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE memories SET content=? WHERE id=? AND user_id=?`, content, id, userID)
-	return err
-}
-
-func (s *Store) DeleteMemory(ctx context.Context, userID, id int64) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM memories WHERE id=? AND user_id=?`, id, userID)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
 }
 
 // ---------- schedules ----------
@@ -384,6 +393,18 @@ func (s *Store) MarkNotificationsRead(ctx context.Context, userID int64) error {
 	return err
 }
 
+// MarkNotificationRead marks read the unread notifications about ref, such
+// as the question the user has since answered. It says whether there were
+// any.
+func (s *Store) MarkNotificationRead(ctx context.Context, userID int64, ref string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE notifications SET read=1 WHERE user_id=? AND task_id=? AND read=0`, userID, ref)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // ---------- push subscriptions ----------
 
 func (s *Store) SavePushSub(ctx context.Context, userID int64, endpoint, js string) error {
@@ -426,6 +447,15 @@ func (s *Store) GetKV(ctx context.Context, key string) (string, error) {
 }
 
 func (s *Store) SetKV(ctx context.Context, key, value string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO kv(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	return setKV(ctx, s.db, key, value)
+}
+
+// execer is what writes run against: the database, or a transaction.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func setKV(ctx context.Context, x execer, key, value string) error {
+	_, err := x.ExecContext(ctx, `INSERT INTO kv(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
 	return err
 }

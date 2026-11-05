@@ -1,0 +1,16 @@
+/* The stage gallery's own frames. Development only; never in the app. */
+
+/* A scenario alone fills the frame, as the app would. */
+.g-page:has(> .g-full) { padding: 0; }
+
+.g-stage { display: flex; flex-direction: column; gap: var(--s3); }
+.g-scenes { align-self: flex-start; flex-wrap: wrap; }
+.app.g-app { height: 760px; min-height: 0; border: 1px solid var(--line); border-radius: var(--r-lg); }
+
+/* The board on its own: as tall as it needs, in a frame like the stage's. */
+.g-board { --col-max: 680px; border: 1px solid var(--line); border-radius: var(--r-lg); padding: 0 var(--gutter); background: var(--bg); }
+.g-board .home { overflow: visible; }
+
+.g-pills { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+.g-pills .follow-pill { position: static; }
+.g-col { max-width: var(--col-max, 680px); }

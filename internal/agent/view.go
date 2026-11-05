@@ -29,7 +29,9 @@ import (
 // read_file shows workspace images and PDF pages to the model as pictures,
 // so it can check an image it generated, or read a scan, chart or form.
 
-const maxViewSide = 1600 // longest side of an image shown to the model
+// maxViewSide is the longest side of an image shown to the model (WP-17):
+// more detail than this costs tokens without helping it read the picture.
+const maxViewSide = 1568
 
 // findTool looks for a program where run_shell would.
 func findTool(name string) string {
@@ -162,14 +164,7 @@ func readPDF(tc *toolCtx, full, rel string, page, offset int) *toolResult {
 	if letters(text) < 40*max(pages, 1) {
 		head += " It has little or no text layer, so it's probably scanned: look at its pages instead."
 	}
-	if offset > len(text) {
-		offset = len(text)
-	}
-	s, more := text[offset:], ""
-	if len(s) > 30000 {
-		s = s[:30000]
-		more = fmt.Sprintf("\n[…truncated; continue with offset=%d]", offset+30000)
-	}
+	s, more := pageOf(text, offset, readPage)
 	return &toolResult{Text: head + "\n\n" + s + more, Kind: "long"}
 }
 

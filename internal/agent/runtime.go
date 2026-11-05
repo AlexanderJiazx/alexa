@@ -5,17 +5,16 @@ package agent
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"alexagent/internal/browser"
@@ -52,6 +51,7 @@ type Runtime struct {
 	toolDefs []any
 
 	baseCtx context.Context
+	closing atomic.Bool // Shutdown was called: runs that end now resume on the next start
 	mu      sync.Mutex
 	runs    map[int64]*run        // user -> the agent loop working for them
 	control map[int64]bool        // user -> they control the browser
@@ -65,6 +65,13 @@ type Runtime struct {
 	// is compacted or reset, or when the user edits memory.
 	memMu sync.Mutex
 	mems  map[int64][]*store.Memory
+
+	reviews map[int64]*memReview // user -> the memory review in flight (memreview.go), under mu
+	moves   map[int64]uint64     // user -> how often their screen was set or asked for (surface.go), under mu
+
+	// judgeTopic asks the model whether a message carries on the topic on
+	// screen (topic.go); tests stand in for it.
+	judgeTopic func(ctx context.Context, instructions, input string) (string, error)
 }
 
 // run is one stretch of work: from a message until Alexa is done or waits
@@ -72,15 +79,42 @@ type Runtime struct {
 type run struct {
 	user   *store.User
 	env    *userenv.Env
+	ctx    context.Context // ends when the user stops the run or the server shuts down
 	cancel context.CancelFunc
 	wake   chan struct{}
 
 	mu       sync.Mutex
 	step     *store.Entry
-	released chan struct{} // closed when the user hands back control
-	awaiting bool          // the user wrote and hasn't been answered yet
-	nudged   bool          // reminded to answer through say
-	held     bool          // the user chose what their screen shows, or this is a scheduled job: don't switch it to the browser
+	released chan struct{}           // closed when the user hands back control
+	awaiting bool                    // the user wrote and hasn't been answered yet
+	nudged   bool                    // reminded to answer through say
+	held     bool                    // the user chose what their screen shows, or this is a scheduled job: don't switch it to the browser
+	job      bool                    // a scheduled job's run the user hasn't written to: it runs in the background
+	asked    bool                    // a call in this batch asked the user: nothing else runs until they answer (exec.go)
+	stopping bool                    // the user pressed Stop
+	stopMark int64                   // the inbox id of Stop's note: what the user sends after it is a new request
+	cut      context.CancelCauseFunc // ends the tool call in flight, if any (exec.go)
+	cutTool  string                  // that call's tool
+	steer    bool                    // the user interrupted: a batch written without their message doesn't run (exec.go)
+	steerAt  int64                   // the inbox id before that message
+	results  bool                    // the last say carried blocks: when the run ends they take the stage (R5)
+	// takeovers counts the times the user took the browser during the run;
+	// turnSeen and turnHeld are what the model turn now running knew of
+	// them (markTurn, exec.go).
+	takeovers int
+	turnSeen  int
+	turnHeld  bool
+	memFails  int // memory edits refused in this run (memory.go)
+}
+
+// cancelled reports whether the run was stopped or the server is shutting
+// down.
+func (r *run) cancelled() bool { return r.ctx != nil && r.ctx.Err() != nil }
+
+func (r *run) isStopping() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stopping
 }
 
 func (r *run) loc() *time.Location { return userLoc(r.user) }
@@ -94,7 +128,8 @@ func userLoc(u *store.User) *time.Location {
 
 func New(ctx context.Context, cfg *config.Config, st *store.Store, client *llm.Client, br *browser.Manager, envs *userenv.Envs, h *hub.Hub, n *notify.Notifier, v *vault.Vault) *Runtime {
 	rt := &Runtime{cfg: cfg, st: st, llm: client, browsers: br, envs: envs, hub: h, notifier: n, vault: v,
-		baseCtx: ctx, runs: map[int64]*run{}, control: map[int64]bool{}, locks: map[int64]*sync.Mutex{}, mems: map[int64][]*store.Memory{}}
+		baseCtx: ctx, runs: map[int64]*run{}, control: map[int64]bool{}, locks: map[int64]*sync.Mutex{}, mems: map[int64][]*store.Memory{},
+		reviews: map[int64]*memReview{}}
 	rt.tools = rt.buildTools()
 	rt.toolMap = map[string]*tool{}
 	rt.toolDefs = []any{map[string]any{"type": "web_search", "search_context_size": "medium"}}
@@ -103,6 +138,9 @@ func New(ctx context.Context, cfg *config.Config, st *store.Store, client *llm.C
 		rt.toolDefs = append(rt.toolDefs, t.schema())
 	}
 	rt.sched = newScheduler(rt)
+	rt.judgeTopic = func(ctx context.Context, instructions, input string) (string, error) {
+		return client.Quick(ctx, cfg.Model, instructions, input)
+	}
 	return rt
 }
 
@@ -139,6 +177,7 @@ func (rt *Runtime) MemoryChanged(userID int64) {
 	rt.memMu.Lock()
 	delete(rt.mems, userID)
 	rt.memMu.Unlock()
+	rt.hub.Publish(userID, hub.Changed("memory"))
 }
 
 func (rt *Runtime) running(id int64) *run {
@@ -174,12 +213,13 @@ func (rt *Runtime) LastURL(userID int64) string {
 	return ss.BrowserURL
 }
 
-// ---------- public API ----------
-
 // Send puts a message into the user's session: a new request, a follow-up,
 // a note while Alexa works, or the answer to its question.
 func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
-	text := strings.TrimSpace(m.Text)
+	// Once its entry is on the screen the message must reach Alexa, even if
+	// the request goes away: a retry finds the entry and isn't sent again.
+	ctx = context.WithoutCancel(ctx)
+	text, said, via := rt.reply(ctx, u.ID, m)
 	if text == "" && len(m.Attach) == 0 {
 		return errors.New("empty message")
 	}
@@ -190,8 +230,14 @@ func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
 	kind, notes := "user", []string{}
 	e := &store.Entry{UserID: u.ID, Kind: "user", Text: text}
 	data := map[string]any{}
+	for k, v := range via {
+		data[k] = v
+	}
 	if len(m.Attach) > 0 || m.Voice {
 		data["attachments"], data["voice"] = m.Attach, m.Voice
+	}
+	if m.ClientID != "" {
+		data["clientId"] = m.ClientID
 	}
 	if m.Voice {
 		notes = append(notes, "spoken")
@@ -213,10 +259,23 @@ func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
 		nd = rt.pendingNeeds(ctx, u.ID)
 	}
 	// A message that sets Alexa to work while it's idle starts a new
-	// exchange. The app shows the current exchange and leaves the earlier
-	// ones to Reflect.
-	if r == nil && nd == nil {
+	// exchange. A tap on what Alexa just showed, or a choice sent from the
+	// report she showed in this exchange, answers it instead: the exchange,
+	// its cards and its panel stay. A new exchange may still carry on the
+	// topic on screen; the model decides while Alexa gets going (topic.go).
+	var judge *pendingTopic
+	if r == nil && nd == nil && !rt.continues(ctx, u.ID, m, via) {
 		data["start"] = true
+		if t, ok := rt.topicToJudge(ctx, u.ID, kind); ok {
+			data["topic"] = "pending"
+			rt.clearPlan(ctx, u.ID)
+			// As at any new exchange, the user's hold on the screen ends
+			// with their message; the panel stays until the answer is in.
+			held := rt.endHold(ctx, u.ID)
+			judge = &pendingTopic{thread: t, held: held, moves: rt.surfaceMoves(u.ID)}
+		} else {
+			rt.onNewExchange(ctx, u.ID, kind == "schedule")
+		}
 	}
 	if len(data) > 0 {
 		e.Data = marshal(data)
@@ -224,10 +283,16 @@ func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
 	if err := rt.addEntry(ctx, e); err != nil {
 		return err
 	}
+	if judge != nil {
+		rt.settleTopic(u.ID, e, *judge, said)
+	}
 	if r != nil {
 		note := strings.Join(append(notes, "sent while you were working"), ", ")
-		if err := rt.st.AddInbox(ctx, u.ID, store.InboxMessage{Kind: kind, Text: stamp(loc, note, text), Attachments: marshal(m.Attach)}); err != nil {
+		if err := rt.st.AddInbox(ctx, u.ID, store.InboxMessage{Kind: kind, Text: stamp(loc, note, said), Attachments: marshal(m.Attach)}); err != nil {
 			return err
+		}
+		if kind == "user" {
+			rt.publishState(u.ID) // the queued count went up
 		}
 		select {
 		case r.wake <- struct{}{}:
@@ -235,16 +300,31 @@ func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
 		}
 		return nil
 	}
+	if nd != nil && (kind == "schedule" || m.answersEarlier(nd) || m.Via == "report" && nd.Confirm) {
+		// A scheduled job never answers the question, and doesn't close
+		// it: it waits until the user answers, and runs after (M3). Nor
+		// does a late answer to a question they skipped earlier (FE-1).
+		// Nor does a message from a report when the question is a confirm
+		// card: what a report's button sends is up to the report, whatever
+		// the button showed, and a purchase, booking or message goes ahead
+		// only on the user's own answer, on the card or typed.
+		note := strings.Join(append(notes, "it came while your question was waiting"), ", ")
+		if err := rt.st.AddInbox(ctx, u.ID, store.InboxMessage{Kind: kind, Text: stamp(loc, note, said), Attachments: marshal(m.Attach)}); err != nil {
+			return err
+		}
+		if kind == "user" {
+			rt.publishState(u.ID) // the queued count went up
+		}
+		return nil
+	}
 	note := strings.Join(notes, ", ")
 	if nd != nil {
-		answer := "The user replied: " + text
-		switch {
-		case kind == "schedule":
-			answer = "The user hasn't answered yet. Meanwhile it's time for this scheduled job: " + text + "\nDo it, then ask again if you still need them."
-		case nd.Kind == "takeover":
-			answer = "The user didn't take over the browser and replied instead: " + text
-		case nd.Kind == "login":
-			answer = "The user didn't enter their login and replied instead: " + text
+		answer := "The user replied: " + said
+		switch nd.Kind {
+		case "takeover":
+			answer = "The user didn't take over the browser and replied instead: " + said
+		case "login":
+			answer = "The user didn't enter their login and replied instead: " + said
 		}
 		if err := rt.resolveNeeds(ctx, u.ID, nd, stamp(loc, note, answer), nil); err != nil {
 			return err
@@ -254,11 +334,62 @@ func (rt *Runtime) Send(ctx context.Context, u *store.User, m Message) error {
 				return err
 			}
 		}
-	} else if err := rt.appendMessage(ctx, u.ID, kind, stamp(loc, note, text), m.Attach); err != nil {
-		return err
+	} else {
+		// Anything still waiting goes first, so the conversation keeps the
+		// order things happened in (L13).
+		if _, err := rt.moveInbox(ctx, u.ID, nil); err != nil {
+			return err
+		}
+		if err := rt.appendMessage(ctx, u.ID, kind, stamp(loc, note, said), m.Attach); err != nil {
+			return err
+		}
 	}
 	rt.launch(u, env, kind == "user", kind == "schedule")
 	return nil
+}
+
+// Interrupt sends the user's message and cuts short the step Alexa is on,
+// so she turns to it at once (POST /api/interrupt): the step ends
+// interrupted, the rest of her batch is skipped, and her next turn starts
+// from the message. Sent while she's still thinking, it skips the batch
+// she was writing without it too, which an ordinary message doesn't: the
+// user asked her to stop what she was about to do. With nothing running
+// it's an ordinary Send.
+func (rt *Runtime) Interrupt(ctx context.Context, u *store.User, m Message) error {
+	ctx = context.WithoutCancel(ctx)
+	r := rt.running(u.ID)
+	before, lastErr := rt.st.InboxLast(ctx, u.ID)
+	// The steer is set before the message goes in: a batch that starts once
+	// it's there must find it, or what the model wrote without the message
+	// would run.
+	steered := r != nil && lastErr == nil && r.steerAfter(before)
+	if err := rt.Send(ctx, u, m); err != nil {
+		if steered {
+			r.mu.Lock()
+			if r.steer && r.steerAt == before {
+				r.steer, r.steerAt = false, 0
+			}
+			r.mu.Unlock()
+		}
+		return err
+	}
+	if r != nil && rt.running(u.ID) == r {
+		r.cutCall(errNewMessage, false)
+	}
+	return nil
+}
+
+// steerAfter makes the run skip what it wrote without the messages after
+// inbox id before (exec.go), and reports whether it set that. An earlier
+// steer that isn't taken yet covers more, so it stays.
+func (r *run) steerAfter(before int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.steer && r.steerAt <= before {
+		return false
+	}
+	r.steer, r.steerAt = true, before
+	return true
 }
 
 // TakeOver gives the user control of the shared browser.
@@ -274,43 +405,80 @@ func (rt *Runtime) TakeOver(ctx context.Context, u *store.User) error {
 		r.mu.Lock()
 		if r.released == nil {
 			r.released = make(chan struct{})
+			r.takeovers++
 		}
 		r.mu.Unlock()
+		// The browser action in flight ends where it is, so Alexa's typing
+		// can't land in what the user clicks (B06). Her next browser step
+		// waits for them to hand back.
+		r.cutCall(errTookOver, true)
 	}
-	_ = rt.st.SetSessionSurface(ctx, u.ID, marshal(Surface{Kind: "browser"}))
+	if tab := rt.peekTab(u.ID); tab != nil {
+		// Until the cut action has let go of the tab, the user's input is
+		// refused too; one that doesn't let go within the grace (or one a
+		// stopped run left behind) mustn't keep them out.
+		if r == nil {
+			tab.Unbind()
+		} else {
+			time.AfterFunc(stopGrace, tab.Unbind)
+		}
+	}
+	_ = rt.writeSurface(ctx, u.ID, Surface{Kind: "browser"})
 	rt.publishState(u.ID)
 	return nil
 }
 
 // HandBack returns browser control to Alexa.
 func (rt *Runtime) HandBack(ctx context.Context, u *store.User, note string) error {
+	ctx = context.WithoutCancel(ctx)
+	note = clip(strings.Join(strings.Fields(note), " "), 280)
 	l := rt.userLock(u.ID)
 	l.Lock()
-	defer l.Unlock()
 	rt.mu.Lock()
 	had := rt.control[u.ID]
 	delete(rt.control, u.ID)
 	r := rt.runs[u.ID]
 	rt.mu.Unlock()
+	if !had && note != "" && (r != nil || rt.pendingNeeds(ctx, u.ID) == nil) {
+		// The browser was already back (another screen handed it back, or
+		// Stop took it): the note is an ordinary message, and Alexa reads it
+		// like one.
+		l.Unlock()
+		return rt.Send(ctx, u, Message{Text: note, Source: "user"})
+	}
+	defer l.Unlock()
 	loc := userLoc(u)
 	suffix := ""
 	if note != "" {
 		suffix = " Their note: " + note
+		// What the user wrote for Alexa is theirs to see in the
+		// conversation too: nothing from a button reaches her unseen.
+		_ = rt.addEntry(ctx, &store.Entry{UserID: u.ID, Kind: "user", Text: note, Data: marshal(map[string]any{"via": "handback"})})
 	}
 	if r != nil {
+		// The note is queued before control is let go, so a model turn that
+		// starts once it's back reads it (markTurn).
+		if had {
+			_ = rt.st.AddInbox(ctx, u.ID, store.InboxMessage{Kind: "system", Text: stamp(loc, "", "[The user took control of the shared browser for a moment and handed it back. The page may have changed — check it before continuing.]"+suffix)})
+		}
 		r.mu.Lock()
 		if r.released != nil {
 			close(r.released)
 			r.released = nil
 		}
 		r.mu.Unlock()
-		if had {
-			_ = rt.st.AddInbox(ctx, u.ID, store.InboxMessage{Kind: "system", Text: stamp(loc, "", "[The user took control of the shared browser for a moment and handed it back. The page may have changed — check it before continuing.]"+suffix)})
-		}
 		rt.publishState(u.ID)
 		return nil
 	}
 	if nd := rt.pendingNeeds(ctx, u.ID); nd != nil {
+		// The run that reads the answer needs the user's folders: if they
+		// can't be had, the question stays open to answer again, rather
+		// than answered with nothing to read it (BH-10).
+		env, err := rt.envs.Ensure(u.ID)
+		if err != nil {
+			rt.publishState(u.ID)
+			return err
+		}
 		answer := "The user took over the browser and has handed control back."
 		switch nd.Kind {
 		case "question":
@@ -323,22 +491,20 @@ func (rt *Runtime) HandBack(ctx context.Context, u *store.User, note string) err
 		var shot []byte
 		if tab := rt.peekTab(u.ID); tab != nil {
 			if st, err := tab.State(); err == nil {
-				answer += "\n\nCurrent browser state:\n" + st.Text
+				answer += handBackState + st.Text
 				shot = st.Screenshot
 			}
 		}
 		if err := rt.resolveNeeds(ctx, u.ID, nd, stamp(loc, "", answer), shot); err != nil {
 			return err
 		}
-		env, err := rt.envs.Ensure(u.ID)
-		if err != nil {
-			return err
-		}
 		rt.launch(u, env, false, false)
 		return nil
 	}
 	if had {
-		_ = rt.st.AddInbox(ctx, u.ID, store.InboxMessage{Kind: "system", Text: stamp(loc, "", "[While you were idle, the user used the shared browser themselves and handed it back.]"+suffix)})
+		// Nothing is running, so the note can join the conversation now,
+		// before whatever the user asks next (L13).
+		_ = rt.appendMessage(ctx, u.ID, "system", stamp(loc, "", "[While you were idle, the user used the shared browser themselves and handed it back.]"+suffix), nil)
 	}
 	rt.publishState(u.ID)
 	return nil
@@ -353,6 +519,8 @@ func (rt *Runtime) InControl(userID int64) bool {
 
 // Stop interrupts whatever Alexa is doing (or waiting for).
 func (rt *Runtime) Stop(ctx context.Context, u *store.User) error {
+	// What Stop records must be kept even if the request goes away.
+	ctx = context.WithoutCancel(ctx)
 	l := rt.userLock(u.ID)
 	l.Lock()
 	defer l.Unlock()
@@ -361,75 +529,100 @@ func (rt *Runtime) Stop(ctx context.Context, u *store.User) error {
 	delete(rt.control, u.ID)
 	rt.mu.Unlock()
 	if r != nil {
-		r.cancel() // the loop records the stop
+		rt.stopRun(ctx, u, r)
 		return nil
 	}
 	if nd := rt.pendingNeeds(ctx, u.ID); nd != nil {
 		_ = rt.resolveNeeds(ctx, u.ID, nd, "The user dismissed this. Don't continue that work unless they ask again.", nil)
+		_ = rt.addEntry(ctx, &store.Entry{UserID: u.ID, Kind: "note", Text: "Stopped"})
+		// Scheduled jobs that waited for the answer run now.
+		if !rt.launchQueued(ctx, u, 0) {
+			_ = rt.st.SetSessionStatus(ctx, u.ID, "idle", "")
+		}
+		rt.publishState(u.ID)
+		return nil
+	}
+	// Nothing is running, yet the session may still say it's working (a
+	// resume that couldn't start): Stop always brings it back (L23).
+	if ss, err := rt.st.GetSession(ctx, u.ID); err == nil && ss.Status == "working" {
 		_ = rt.st.SetSessionStatus(ctx, u.ID, "idle", "")
+	}
+	rt.publishState(u.ID)
+	return nil
+}
+
+// stopRun asks the run to stop, and shows at once that it's stopping: the
+// run winds down within moments (exec.go gives a tool stopGrace) and ends
+// in stopped(). Stop's note goes in the inbox now, so the conversation gets
+// it after what the user sent before pressing Stop and before what they
+// send next; that, and only that, starts a new run once this one is over.
+// The caller holds the user lock; r.user isn't read here, since the loop
+// replaces it without one.
+func (rt *Runtime) stopRun(ctx context.Context, u *store.User, r *run) {
+	r.mu.Lock()
+	first := !r.stopping
+	r.stopping = true
+	r.mu.Unlock()
+	if first {
+		if err := rt.st.AddInbox(ctx, u.ID, store.InboxMessage{Kind: "system", Text: stamp(userLoc(u), "", stopNote)}); err == nil {
+			if mark, err := rt.st.InboxLast(ctx, u.ID); err == nil {
+				r.mu.Lock()
+				r.stopMark = mark
+				r.mu.Unlock()
+			}
+		}
 		_ = rt.addEntry(ctx, &store.Entry{UserID: u.ID, Kind: "note", Text: "Stopped"})
 	}
+	rt.runPhaseFor(u.ID, "stopping")
+	_ = rt.st.SetSessionActivity(ctx, u.ID, "Stopping")
 	rt.publishState(u.ID)
-	return nil
-}
-
-// View returns the session as clients see it.
-func (rt *Runtime) View(ctx context.Context, userID int64) View {
-	v := View{Status: "idle"}
-	ss, err := rt.st.GetSession(ctx, userID)
-	if err != nil {
-		return v
-	}
-	v.Status, v.Activity, v.BrowserURL = ss.Status, ss.Activity, ss.BrowserURL
-	v.ContextTokens, v.Compactions = ss.ContextTokens, ss.Compactions
-	var nd Needs
-	if len(ss.Needs) > 0 && json.Unmarshal(ss.Needs, &nd) == nil && nd.Kind != "" {
-		v.Needs = &nd
-	}
-	_ = json.Unmarshal(ss.Surface, &v.Surface)
-	rt.mu.Lock()
-	v.Control = rt.control[userID]
-	rt.mu.Unlock()
-	return v
-}
-
-// SetSurface changes what the user's screen shows: the browser, a report,
-// or just the conversation.
-func (rt *Runtime) SetSurface(ctx context.Context, u *store.User, s Surface) error {
-	switch s.Kind {
-	case "", "browser":
-		s.ID = ""
-	case "report":
-		if _, err := rt.st.GetReport(ctx, u.ID, s.ID); err != nil {
-			return ErrNotFound
-		}
-	default:
-		return errors.New("unknown surface")
-	}
-	if err := rt.st.SetSessionSurface(ctx, u.ID, marshal(s)); err != nil {
-		return err
-	}
-	if r := rt.running(u.ID); r != nil {
-		r.mu.Lock()
-		r.held = s.Kind != "browser"
-		r.mu.Unlock()
-	}
-	rt.publishState(u.ID)
-	return nil
+	r.cancel()
 }
 
 // Compact summarises the older conversation now instead of waiting for the
-// context to fill up.
+// context to fill up. A summary dropped because the conversation changed
+// while it was written is tried once more: that one finds Alexa at work
+// (ErrBusy), or the conversation as it is now.
 func (rt *Runtime) Compact(ctx context.Context, u *store.User) error {
+	err := rt.compactNow(ctx, u)
+	if errors.Is(err, errCompactChanged) {
+		err = rt.compactNow(ctx, u)
+	}
+	rt.publishState(u.ID)
+	return err
+}
+
+// compactNow is one try of Compact. It plans and commits under the user
+// lock, with nothing running, but lets go of the lock for the summary's
+// model call (BH-2): Stop, Send and the scheduler, which runs every user's
+// jobs on one goroutine, don't wait for it. The commit doesn't go ahead if
+// a run started meanwhile, or the conversation changed (commitCompaction).
+func (rt *Runtime) compactNow(ctx context.Context, u *store.User) error {
 	l := rt.userLock(u.ID)
+	l.Lock()
+	if rt.running(u.ID) != nil || !rt.startCompacting(u.ID) {
+		l.Unlock()
+		return ErrBusy
+	}
+	defer rt.doneCompacting(u.ID)
+	c, err := rt.planCompaction(ctx, u, true)
+	if err != nil || c == nil {
+		l.Unlock()
+		return err
+	}
+	_ = rt.st.SetSessionActivity(ctx, u.ID, "Tidying up my notes")
+	rt.publishState(u.ID)
+	l.Unlock()
+	summary, err := rt.foldSummary(ctx, u, c)
+	if err != nil {
+		return err
+	}
 	l.Lock()
 	defer l.Unlock()
 	if rt.running(u.ID) != nil {
-		return ErrBusy
+		return errCompactChanged
 	}
-	err := rt.compact(ctx, u, true)
-	rt.publishState(u.ID)
-	return err
+	return rt.commitCompaction(ctx, u, c, summary)
 }
 
 // Reset forgets the conversation. Memories, files, reports and schedules
@@ -443,10 +636,16 @@ func (rt *Runtime) Reset(ctx context.Context, u *store.User) error {
 	}
 	rt.mu.Lock()
 	delete(rt.control, u.ID)
+	rt.cancelReviewLocked(u.ID)
 	rt.mu.Unlock()
 	if err := rt.st.ResetSession(ctx, u.ID); err != nil {
 		return err
 	}
+	// The memory review's notes on the forgotten conversation go too.
+	_ = rt.st.SetKV(ctx, reviewKey(u.ID), "")
+	// The screenshots went with the conversation that showed them (BH-3).
+	// Nothing runs, so none is waiting for its item.
+	rt.pruneShots(ctx, u.ID, 0)
 	rt.MemoryChanged(u.ID)
 	rt.hub.Publish(u.ID, hub.Event{Type: "reset"})
 	rt.publishState(u.ID)
@@ -477,35 +676,86 @@ func (rt *Runtime) peekTab(userID int64) *browser.Tab {
 }
 
 // ResumeInterrupted restarts sessions that were working when the server
-// stopped.
+// stopped: shut down mid-run (stopped() leaves them "working") or killed.
+// Each resumes once, as the kind of run it was. Messages still waiting on
+// their topic call are settled first.
 func (rt *Runtime) ResumeInterrupted(ctx context.Context) {
+	rt.settleLeftTopics(ctx)
 	ids, err := rt.st.SessionsWithStatus(ctx, "working")
 	if err != nil {
 		slog.Error("resume sessions", "err", err)
 		return
 	}
 	for _, id := range ids {
-		u, err := rt.st.GetUser(ctx, id)
-		if err != nil {
-			continue
-		}
-		env, err := rt.envs.Ensure(u.ID)
-		if err != nil {
-			continue
-		}
-		_ = rt.st.SetEntriesStatus(ctx, id, "step", "running", "failed")
-		_ = rt.st.AddInbox(ctx, id, store.InboxMessage{Kind: "system", Text: stamp(userLoc(u), "", "[The server restarted while you were working. What you did and found before is above, so don't redo it: the browser restarted too, so re-open the page you were on and carry on from where you stopped.]")})
-		slog.Info("resuming session", "user", u.Username)
-		l := rt.userLock(id)
-		l.Lock()
-		rt.launch(u, env, true, false)
-		l.Unlock()
+		rt.resume(ctx, id)
 	}
+}
+
+// resume restarts one interrupted session. It's idempotent: under the
+// user's lock it does nothing once a run is going or the session isn't
+// "working" any more, so calling it again can't add a second note or start
+// a second run (L15).
+func (rt *Runtime) resume(ctx context.Context, id int64) {
+	u, err := rt.st.GetUser(ctx, id)
+	if err != nil {
+		slog.Warn("can't resume session", "user", id, "err", err)
+		return
+	}
+	env, err := rt.envs.Ensure(u.ID)
+	if err != nil {
+		// Stop still brings the session back to idle (L23).
+		slog.Warn("can't resume session", "user", u.Username, "err", err)
+		return
+	}
+	l := rt.userLock(id)
+	l.Lock()
+	defer l.Unlock()
+	if rt.running(id) != nil {
+		return
+	}
+	if ss, err := rt.st.GetSession(ctx, id); err != nil || ss.Status != "working" {
+		return
+	}
+	flags := rt.takeResume(ctx, id)
+	_ = rt.st.SetEntriesStatus(ctx, id, "step", "running", "interrupted")
+	_ = rt.st.AddInbox(ctx, id, store.InboxMessage{Kind: "system", Text: stamp(userLoc(u), "", "[The server restarted while you were working. What you did and found before is above, so don't redo it: the browser restarted too, so re-open the page you were on and carry on from where you stopped.]")})
+	slog.Info("resuming session", "user", u.Username)
+	rt.launch(u, env, flags.Awaiting, flags.Held)
+}
+
+// resumeFlags are what a run interrupted by a shutdown was, so it resumes
+// the same way: a background job stays in the background, and Alexa still
+// owes the user an answer only if she did. Held is a background job's: a
+// screen the user held during their own request stays held by the
+// session's surface, and the run resumes in the foreground.
+type resumeFlags struct {
+	Awaiting bool `json:"awaiting"`
+	Held     bool `json:"held"`
+}
+
+func resumeKey(userID int64) string { return fmt.Sprintf("resume:%d", userID) }
+
+// saveResume keeps the run's flags until it resumes.
+func (rt *Runtime) saveResume(ctx context.Context, userID int64, f resumeFlags) {
+	_ = rt.st.SetKV(ctx, resumeKey(userID), string(marshal(f)))
+}
+
+// takeResume returns the flags saved at shutdown and forgets them. A run
+// killed without a shutdown saved none: it resumes in the foreground, owing
+// the user an answer, as before.
+func (rt *Runtime) takeResume(ctx context.Context, userID int64) resumeFlags {
+	f := resumeFlags{Awaiting: true}
+	if v, err := rt.st.GetKV(ctx, resumeKey(userID)); err == nil && v != "" {
+		_ = json.Unmarshal([]byte(v), &f)
+		_ = rt.st.SetKV(ctx, resumeKey(userID), "")
+	}
+	return f
 }
 
 // Shutdown cancels running loops; their sessions stay "working" and resume
 // on the next start.
 func (rt *Runtime) Shutdown() {
+	rt.closing.Store(true)
 	rt.mu.Lock()
 	for _, r := range rt.runs {
 		r.cancel()
@@ -519,7 +769,9 @@ func (rt *Runtime) Shutdown() {
 	}
 }
 
-// ---------- internals ----------
+// shuttingDown reports whether the server is going down, so a run that
+// ends now was interrupted rather than stopped.
+func (rt *Runtime) shuttingDown() bool { return rt.closing.Load() || rt.baseCtx.Err() != nil }
 
 // launch starts the agent loop for a user. The caller holds the user lock.
 // A background run (a scheduled job) leaves the user's screen alone until
@@ -530,10 +782,12 @@ func (rt *Runtime) launch(u *store.User, env *userenv.Env, awaiting, background 
 		rt.mu.Unlock()
 		return
 	}
+	// The live run always wins over a memory review (memreview.go).
+	rt.cancelReviewLocked(u.ID)
 	// Most requests touch the web; start Chrome while the model thinks.
 	rt.browsers.Prewarm(u.ID)
 	ctx, cancel := context.WithCancel(rt.baseCtx)
-	r := &run{user: u, env: env, cancel: cancel, wake: make(chan struct{}, 1), awaiting: awaiting, held: background}
+	r := &run{user: u, env: env, ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), awaiting: awaiting, held: background, job: background}
 	if rt.control[u.ID] {
 		r.released = make(chan struct{})
 	}
@@ -563,12 +817,65 @@ func (rt *Runtime) pendingNeeds(ctx context.Context, userID int64) *Needs {
 
 func isMessage(kind string) bool { return kind == "user" || kind == "schedule" || kind == "system" }
 
+// handBackState heads the page state a hand-back's answer ends with; the
+// memory review reads the answer only up to it (reviewTranscript).
+const handBackState = "\n\nCurrent browser state:\n"
+
 // appendMessage adds a message from the user (or about them) to the
 // conversation.
 func (rt *Runtime) appendMessage(ctx context.Context, userID int64, kind, text string, attach []Attachment) error {
+	return rt.st.AppendItems(ctx, userID, []json.RawMessage{messageItem(kind, text, attach)})
+}
+
+// messageItem is a message from the user (or about them) as the
+// conversation stores it.
+func messageItem(kind, text string, attach []Attachment) json.RawMessage {
 	content := []map[string]any{{"type": "input_text", "text": text}}
 	item := marshal(map[string]any{"role": "user", "content": content})
-	return rt.st.AppendItems(ctx, userID, []json.RawMessage{marshal(storedItem{Item: item, Kind: kind, Attach: attach})})
+	return marshal(storedItem{Item: item, Kind: kind, Attach: attach})
+}
+
+// moveInbox moves the waiting messages keep accepts (all, if keep is nil)
+// into the conversation, each as appendMessage adds one, in the same step
+// as taking them from the inbox, so none is lost or read twice (L14). It
+// returns what it moved.
+func (rt *Runtime) moveInbox(ctx context.Context, userID int64, keep func(store.InboxMessage) bool) ([]store.InboxMessage, error) {
+	return rt.st.MoveInbox(ctx, userID, keep, func(msgs []store.InboxMessage) []json.RawMessage {
+		items := make([]json.RawMessage, len(msgs))
+		for i, m := range msgs {
+			var attach []Attachment
+			_ = json.Unmarshal(m.Attachments, &attach)
+			items[i] = messageItem(m.Kind, m.Text, attach)
+		}
+		return items
+	})
+}
+
+// launchQueued moves what's waiting in the inbox into the conversation and,
+// if the user wrote after mark (an inbox id; 0 counts everything) or a
+// scheduled job is waiting, starts the run that handles it: in the
+// foreground for the user, in the background for a job alone. It reports
+// whether it started one. The caller holds the user lock.
+func (rt *Runtime) launchQueued(ctx context.Context, u *store.User, mark int64) bool {
+	moved, err := rt.moveInbox(ctx, u.ID, nil)
+	if err != nil {
+		slog.Warn("move inbox", "user", u.ID, "err", err)
+	}
+	user, job := false, false
+	for _, m := range moved {
+		user = user || m.Kind == "user" && m.ID > mark
+		job = job || m.Kind == "schedule"
+	}
+	if !user && !job {
+		return false
+	}
+	env, err := rt.envs.Ensure(u.ID)
+	if err != nil {
+		slog.Warn("can't start the next run", "user", u.ID, "err", err)
+		return false
+	}
+	rt.launch(u, env, user, !user)
+	return true
 }
 
 // resolveNeeds answers the tool call the session is waiting on.
@@ -588,39 +895,12 @@ func (rt *Runtime) resolveNeeds(ctx context.Context, userID int64, nd *Needs, an
 		if err := rt.st.SetEntryStatus(ctx, userID, nd.EntryID, "answered"); err == nil {
 			rt.hub.Publish(userID, hub.Event{Type: "entryStatus", Data: map[string]any{"id": nd.EntryID, "status": "answered"}})
 		}
-	}
-	return rt.st.SetSessionNeeds(ctx, userID, nil)
-}
-
-func (rt *Runtime) publishState(userID int64) {
-	rt.hub.Publish(userID, hub.Event{Type: "state", Data: rt.View(context.Background(), userID)})
-}
-
-// showSurface puts something on the user's screen (if it isn't already).
-func (rt *Runtime) showSurface(userID int64, s Surface) {
-	ctx := context.Background()
-	if ss, err := rt.st.GetSession(ctx, userID); err == nil {
-		var cur Surface
-		_ = json.Unmarshal(ss.Surface, &cur)
-		if cur == s {
-			return
+		// So is the note that told the user about it (D1).
+		if read, err := rt.st.MarkNotificationRead(ctx, userID, "entry:"+strconv.FormatInt(nd.EntryID, 10)); err == nil && read {
+			rt.hub.Publish(userID, hub.Changed("notifications"))
 		}
 	}
-	_ = rt.st.SetSessionSurface(ctx, userID, marshal(s))
-	rt.publishState(userID)
-}
-
-// showReport puts a report on the user's screen and in their feed.
-func (rt *Runtime) showReport(ctx context.Context, u *store.User, rep *store.Report, updated bool) {
-	rt.hub.Publish(u.ID, hub.Event{Type: "report", Data: rep})
-	_ = rt.addEntry(ctx, &store.Entry{UserID: u.ID, Kind: "report", Text: rep.Title, Data: marshal(map[string]any{"id": rep.ID, "updated": updated})})
-	_ = rt.st.SetSessionSurface(ctx, u.ID, marshal(Surface{Kind: "report", ID: rep.ID}))
-	rt.publishState(u.ID)
-	body := "Alexa wrote you a report."
-	if rep.Format == "markdown" {
-		body = trim(plain(rep.Content), 160)
-	}
-	_ = rt.notify(ctx, u, "report:"+rep.ID, rep.Title, body, false, false)
+	return rt.st.SetSessionNeeds(ctx, userID, nil)
 }
 
 func (rt *Runtime) addEntry(ctx context.Context, e *store.Entry) error {
@@ -653,62 +933,4 @@ func (rt *Runtime) saveShot(userID int64, img []byte) (string, error) {
 	}
 	name := fmt.Sprintf("s-%d.jpg", time.Now().UnixNano())
 	return name, os.WriteFile(filepath.Join(env.Shots, name), img, 0o600)
-}
-
-func (rt *Runtime) generateImage(ctx context.Context, prompt string) ([]byte, error) {
-	body := marshal(map[string]any{"model": rt.cfg.ImageModel, "prompt": prompt, "n": 1})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, rt.cfg.BaseURL+"/images/generations", strings.NewReader(string(body)))
-	req.Header.Set("Authorization", "Bearer "+rt.cfg.APIKey)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
-	if resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("image API %s: %s", resp.Status, strings.TrimSpace(string(data)))
-	}
-	var out struct {
-		Data []struct {
-			B64 string `json:"b64_json"`
-			URL string `json:"url"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(data, &out); err != nil || len(out.Data) == 0 {
-		return nil, fmt.Errorf("unexpected image API response")
-	}
-	if out.Data[0].B64 != "" {
-		return base64.StdEncoding.DecodeString(out.Data[0].B64)
-	}
-	r2, err := http.Get(out.Data[0].URL)
-	if err != nil {
-		return nil, err
-	}
-	defer r2.Body.Close()
-	return io.ReadAll(io.LimitReader(r2.Body, 64<<20))
-}
-
-func (rt *Runtime) describeSchedules(ctx context.Context, u *store.User) string {
-	list, err := rt.st.ListSchedules(ctx, u.ID)
-	if err != nil {
-		return "error: " + err.Error()
-	}
-	if len(list) == 0 {
-		return "No schedules."
-	}
-	var b strings.Builder
-	loc := userLoc(u)
-	for _, sc := range list {
-		when := sc.Cron
-		if sc.RunAt > 0 {
-			when = "once at " + time.UnixMilli(sc.RunAt).In(loc).Format("2006-01-02 15:04")
-		}
-		state := "enabled"
-		if !sc.Enabled {
-			state = "disabled"
-		}
-		fmt.Fprintf(&b, "- %s %q (%s, %s): %s\n", sc.ID, sc.Name, when, state, sc.Prompt)
-	}
-	return b.String()
 }

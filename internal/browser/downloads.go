@@ -25,14 +25,24 @@ type download struct {
 }
 
 type downloads struct {
-	dir  string
+	dir string
+	// done, if set, is called when a download has landed, whether or not
+	// the agent reads a page state after it (one can finish during a
+	// take-over, or after the run's last action).
+	done func()
 	mu   sync.Mutex
 	list []*download
 }
 
 func (ds *downloads) event(ev any) {
+	landed := false
 	ds.mu.Lock()
-	defer ds.mu.Unlock()
+	defer func() {
+		ds.mu.Unlock()
+		if landed && ds.done != nil {
+			ds.done()
+		}
+	}()
 	switch e := ev.(type) {
 	case *cdpbrowser.EventDownloadWillBegin:
 		name := filepath.Base(e.SuggestedFilename)
@@ -52,6 +62,7 @@ func (ds *downloads) event(ev any) {
 					from = filepath.Join(ds.dir, e.GUID)
 				}
 				d.name = place(from, ds.dir, d.name)
+				landed = true
 			}
 		}
 	}
@@ -59,8 +70,9 @@ func (ds *downloads) event(ev any) {
 
 // take returns the downloads not reported yet, waiting up to wait for those
 // in progress to finish. One still in progress is reported again once it's
-// done.
-func (ds *downloads) take(wait time.Duration) []download {
+// done. pause waits between checks; when it fails (the call was cut), take
+// stops waiting and reports what it has.
+func (ds *downloads) take(wait time.Duration, pause func(time.Duration) error) []download {
 	deadline := time.Now().Add(wait)
 	for {
 		ds.mu.Lock()
@@ -82,7 +94,9 @@ func (ds *downloads) take(wait time.Duration) []download {
 			return out
 		}
 		ds.mu.Unlock()
-		time.Sleep(100 * time.Millisecond)
+		if pause(100*time.Millisecond) != nil {
+			deadline = time.Time{}
+		}
 	}
 }
 

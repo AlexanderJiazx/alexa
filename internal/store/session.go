@@ -97,16 +97,30 @@ func (s *Store) setSession(ctx context.Context, userID int64, set string, args .
 	return err
 }
 
+// GetSession reads the user's session. One that hasn't been written yet (a
+// new user's, or one just reset) is idle, and reading it writes nothing:
+// a read never waits for the database's write lock (BH-6). The first
+// write makes the row (setSession).
 func (s *Store) GetSession(ctx context.Context, userID int64) (*Session, error) {
-	if err := s.ensureSession(ctx, userID); err != nil {
-		return nil, err
-	}
-	var ss Session
+	return getSession(ctx, s.db, userID)
+}
+
+// querier is what reads run against: the database, or a transaction.
+type querier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func getSession(ctx context.Context, q querier, userID int64) (*Session, error) {
+	ss := Session{UserID: userID, Status: "idle"}
 	var needs, surface string
-	err := s.db.QueryRowContext(ctx, `SELECT user_id, status, activity, needs_json, surface_json, browser_url, summary, compacted_through,
+	err := q.QueryRowContext(ctx, `SELECT user_id, status, activity, needs_json, surface_json, browser_url, summary, compacted_through,
 		compactions, context_tokens, input_tokens, output_tokens, updated_at FROM session_state WHERE user_id=?`, userID).
 		Scan(&ss.UserID, &ss.Status, &ss.Activity, &needs, &surface, &ss.BrowserURL, &ss.Summary, &ss.CompactedThrough,
 			&ss.Compactions, &ss.ContextTokens, &ss.InputTokens, &ss.OutputTokens, &ss.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &ss, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +131,29 @@ func (s *Store) GetSession(ctx context.Context, userID int64) (*Session, error) 
 		ss.Surface = json.RawMessage(surface)
 	}
 	return &ss, nil
+}
+
+// Conversation reads the session together with the conversation items its
+// summary doesn't cover, as of one moment: a compaction that lands between
+// the two reads can't leave the old summary with only the items after the
+// new one. It's what replay and the model's view read (BH-3).
+func (s *Store) Conversation(ctx context.Context, userID int64) (*Session, []ItemRow, error) {
+	// A read-only transaction starts deferred, so it doesn't take the
+	// write lock that _txlock=immediate gives the others.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, err
+	}
+	defer tx.Rollback()
+	ss, err := getSession(ctx, tx, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := items(ctx, tx, userID, ss.CompactedThrough)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ss, rows, nil
 }
 
 func (s *Store) SetSessionStatus(ctx context.Context, userID int64, status, activity string) error {
@@ -145,9 +182,62 @@ func (s *Store) AddSessionUsage(ctx context.Context, userID, in, out int64) erro
 	return s.setSession(ctx, userID, `input_tokens=input_tokens+?, output_tokens=output_tokens+?, context_tokens=?`, in, out, in)
 }
 
-// CompactSession replaces the conversation up to item id through with summary.
-func (s *Store) CompactSession(ctx context.Context, userID int64, summary string, through int64) error {
-	return s.setSession(ctx, userID, `summary=?, compacted_through=?, compactions=compactions+1, context_tokens=0`, summary, through)
+// ErrChanged is returned by a write based on what was read earlier, when
+// that has changed since.
+var ErrChanged = errors.New("changed meanwhile")
+
+// Kept is what's kept of the items a compaction deletes: their moments for
+// recall, and notes in kv (recall's mark, the memory review's unread part).
+// CompactSession writes it in the transaction that deletes them, so a
+// crash or a failed write can't lose the items without it.
+type Kept struct {
+	Recall []RecallDoc
+	KV     map[string]string
+}
+
+// CompactSession replaces the conversation up to item id through with
+// summary, and deletes those items: replay and the model's view only read
+// what comes after the summary (Conversation), so nothing reads them again
+// (BH-3). What's kept of them goes in with the delete. It writes only if
+// the conversation is still as the summary was made from: compacted
+// through since, its newest item last. Otherwise (another compaction, a
+// new item, a reset) it writes nothing and returns ErrChanged.
+func (s *Store) CompactSession(ctx context.Context, userID int64, summary string, since, through, last int64, kept Kept) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	ss, err := getSession(ctx, tx, userID)
+	if err != nil {
+		return err
+	}
+	var newest int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM session_items WHERE user_id=?`, userID).Scan(&newest); err != nil {
+		return err
+	}
+	if ss.CompactedThrough != since || newest != last || through > last {
+		return ErrChanged
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO session_state(user_id, updated_at) VALUES(?,?) ON CONFLICT(user_id) DO NOTHING`, userID, now()); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE session_state SET summary=?, compacted_through=?, compactions=compactions+1, context_tokens=0, updated_at=? WHERE user_id=?`,
+		summary, through, now(), userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM session_items WHERE user_id=? AND id<=?`, userID, through); err != nil {
+		return err
+	}
+	if err := indexRecall(ctx, tx, userID, kept.Recall); err != nil {
+		return err
+	}
+	for k, v := range kept.KV {
+		if err := setKV(ctx, tx, k, v); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // SessionsWithStatus lists the users whose session is in the given state.
@@ -181,6 +271,7 @@ func (s *Store) ResetSession(ctx context.Context, userID int64) error {
 		`DELETE FROM inbox WHERE user_id=?`,
 		`DELETE FROM feed WHERE user_id=?`,
 		`DELETE FROM session_state WHERE user_id=?`,
+		`DELETE FROM recall_docs WHERE user_id=? AND kind<>'report'`, // reports stay, so recall still finds them
 	} {
 		if _, err := tx.ExecContext(ctx, q, userID); err != nil {
 			return err
@@ -203,7 +294,7 @@ func (s *Store) AppendItems(ctx context.Context, userID int64, items []json.RawM
 	}
 	defer tx.Rollback()
 	for _, it := range items {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO session_items(user_id, json) VALUES(?,?)`, userID, string(it)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO session_items(user_id, json, created_at) VALUES(?,?,?)`, userID, string(it), now()); err != nil {
 			return err
 		}
 	}
@@ -212,7 +303,11 @@ func (s *Store) AppendItems(ctx context.Context, userID int64, items []json.RawM
 
 // Items returns the conversation items after the given id, oldest first.
 func (s *Store) Items(ctx context.Context, userID, afterID int64) ([]ItemRow, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, json FROM session_items WHERE user_id=? AND id>? ORDER BY id`, userID, afterID)
+	return items(ctx, s.db, userID, afterID)
+}
+
+func items(ctx context.Context, q querier, userID, afterID int64) ([]ItemRow, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id, json FROM session_items WHERE user_id=? AND id>? ORDER BY id`, userID, afterID)
 	if err != nil {
 		return nil, err
 	}
@@ -233,9 +328,11 @@ func (s *Store) Items(ctx context.Context, userID, afterID int64) ([]ItemRow, er
 // ---------- inbox (messages that arrive while the agent works) ----------
 
 type InboxMessage struct {
+	ID          int64  // set when read; ids grow with arrival
 	Kind        string // user | schedule | system
 	Text        string
 	Attachments json.RawMessage
+	CreatedAt   int64 // unix ms, set when read
 }
 
 func (s *Store) AddInbox(ctx context.Context, userID int64, m InboxMessage) error {
@@ -252,33 +349,87 @@ func (s *Store) InboxCount(ctx context.Context, userID int64) (int, error) {
 	return n, err
 }
 
-// TakeInbox returns and removes the user's waiting messages.
-func (s *Store) TakeInbox(ctx context.Context, userID int64) ([]InboxMessage, error) {
+// InboxUserCount counts the user's own messages waiting for Alexa to read
+// them; the composer shows them as queued until the count drops (WP-18).
+// Stop's note and other system lines aren't the user's, so they don't count.
+func (s *Store) InboxUserCount(ctx context.Context, userID int64) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM inbox WHERE user_id=? AND kind='user'`, userID).Scan(&n)
+	return n, err
+}
+
+// InboxHas reports whether a message of the given kind is waiting that
+// arrived after the message with id after (0 for any).
+func (s *Store) InboxHas(ctx context.Context, userID int64, kind string, after int64) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM inbox WHERE user_id=? AND kind=? AND id>?`, userID, kind, after).Scan(&n)
+	return n > 0, err
+}
+
+// InboxLast returns the id of the user's newest waiting message, or 0. A
+// message that arrives later has a greater id.
+func (s *Store) InboxLast(ctx context.Context, userID int64) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM inbox WHERE user_id=?`, userID).Scan(&id)
+	return id, err
+}
+
+// MoveInbox moves the user's waiting messages that keep accepts (all of
+// them, if keep is nil) from the inbox into the conversation, in one
+// transaction: conv turns them into the items to append, in arrival order
+// (it may fold several into one, as an answer does). A message is never
+// lost between the two, by a crash or a cancelled request, nor delivered
+// twice. It returns the messages moved.
+func (s *Store) MoveInbox(ctx context.Context, userID int64, keep func(InboxMessage) bool, conv func([]InboxMessage) []json.RawMessage) ([]InboxMessage, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT kind, text, attachments FROM inbox WHERE user_id=? ORDER BY id`, userID)
+	all, err := inboxOf(ctx, tx, userID)
 	if err != nil {
 		return nil, err
 	}
+	var moved []InboxMessage
+	for _, m := range all {
+		if keep == nil || keep(m) {
+			moved = append(moved, m)
+		}
+	}
+	if len(moved) == 0 {
+		return nil, nil
+	}
+	for _, it := range conv(moved) {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO session_items(user_id, json, created_at) VALUES(?,?,?)`, userID, string(it), now()); err != nil {
+			return nil, err
+		}
+	}
+	for _, m := range moved {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM inbox WHERE id=? AND user_id=?`, m.ID, userID); err != nil {
+			return nil, err
+		}
+	}
+	return moved, tx.Commit()
+}
+
+// inboxOf reads the user's waiting messages, oldest first.
+func inboxOf(ctx context.Context, tx *sql.Tx, userID int64) ([]InboxMessage, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT id, kind, text, attachments, created_at FROM inbox WHERE user_id=? ORDER BY id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 	var out []InboxMessage
 	for rows.Next() {
 		var m InboxMessage
 		var a string
-		if err := rows.Scan(&m.Kind, &m.Text, &a); err != nil {
-			rows.Close()
+		if err := rows.Scan(&m.ID, &m.Kind, &m.Text, &a, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		m.Attachments = json.RawMessage(a)
 		out = append(out, m)
 	}
-	rows.Close()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM inbox WHERE user_id=?`, userID); err != nil {
-		return nil, err
-	}
-	return out, tx.Commit()
+	return out, rows.Err()
 }
 
 // ---------- feed (what the user sees) ----------
@@ -307,11 +458,67 @@ func (s *Store) AddEntry(ctx context.Context, e *Entry) error {
 	return nil
 }
 
+// UpdateEntry rewrites an entry. It's ErrNotFound when the entry is gone
+// (the conversation was cleared meanwhile).
 func (s *Store) UpdateEntry(ctx context.Context, e *Entry) error {
 	e.UpdatedAt = now()
-	_, err := s.db.ExecContext(ctx, `UPDATE feed SET text=?, done_text=?, status=?, data=?, updated_at=? WHERE id=? AND user_id=?`,
+	res, err := s.db.ExecContext(ctx, `UPDATE feed SET text=?, done_text=?, status=?, data=?, updated_at=? WHERE id=? AND user_id=?`,
 		e.Text, e.DoneText, e.Status, string(e.Data), e.UpdatedAt, e.ID, e.UserID)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SettleTopic records the topic call's answer in a message's entry: it
+// drops data.topic, and sets data.followUp when the message carries the
+// topic on. Nothing else in the entry changes, so what was written to it
+// while the call was out stays. It returns the entry as it now is, or
+// ErrNotFound when it's gone or no longer waiting on its call.
+func (s *Store) SettleTopic(ctx context.Context, userID, id int64, follow bool) (*Entry, error) {
+	data := `json_remove(data, '$.topic')`
+	if follow {
+		data = `json_set(json_remove(data, '$.topic'), '$.followUp', json('true'))`
+	}
+	var e Entry
+	var d string
+	err := s.db.QueryRowContext(ctx, `UPDATE feed SET data=`+data+`, updated_at=?
+		WHERE id=? AND user_id=? AND json_valid(data) AND json_extract(data, '$.topic')='pending'
+		RETURNING id, user_id, kind, text, done_text, status, data, created_at, updated_at`, now(), id, userID).
+		Scan(&e.ID, &e.UserID, &e.Kind, &e.Text, &e.DoneText, &e.Status, &d, &e.CreatedAt, &e.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	e.Data = json.RawMessage(d)
+	return &e, nil
+}
+
+// PendingTopics returns, for every user, the messages still marked as
+// waiting on their topic call (data.topic "pending").
+func (s *Store) PendingTopics(ctx context.Context) ([]*Entry, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, kind, text, done_text, status, data, created_at, updated_at
+		FROM feed WHERE kind='user' AND json_valid(data) AND json_extract(data, '$.topic')='pending' ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Entry
+	for rows.Next() {
+		var e Entry
+		var data string
+		if err := rows.Scan(&e.ID, &e.UserID, &e.Kind, &e.Text, &e.DoneText, &e.Status, &data, &e.CreatedAt, &e.UpdatedAt); err != nil {
+			return nil, err
+		}
+		e.Data = json.RawMessage(data)
+		out = append(out, &e)
+	}
+	return out, rows.Err()
 }
 
 // Feed returns up to limit entries before the given id (0 = the latest),
@@ -406,9 +613,13 @@ func (s *Store) GetReport(ctx context.Context, userID int64, id string) (*Report
 	return &r, nil
 }
 
-// ListReports returns the user's reports, newest first, without content.
+// ListReports returns the user's reports, newest first, with what their
+// cards preview and no more (D4): of the data, the takeaway, the preview
+// and the first item; of a markdown report's content, its start. The rest
+// comes with the report itself (GetReport).
 func (s *Store) ListReports(ctx context.Context, userID int64, limit int) ([]*Report, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, title, format, created_at, updated_at FROM reports WHERE user_id=? ORDER BY updated_at DESC LIMIT ?`, userID, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, user_id, title, format, CASE WHEN format='markdown' THEN substr(content, 1, ?) ELSE '' END, data, created_at, updated_at
+		FROM reports WHERE user_id=? ORDER BY updated_at DESC LIMIT ?`, reportLead, userID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -416,12 +627,43 @@ func (s *Store) ListReports(ctx context.Context, userID int64, limit int) ([]*Re
 	var out []*Report
 	for rows.Next() {
 		var r Report
-		if err := rows.Scan(&r.ID, &r.UserID, &r.Title, &r.Format, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		var data string
+		if err := rows.Scan(&r.ID, &r.UserID, &r.Title, &r.Format, &r.Content, &data, &r.CreatedAt, &r.UpdatedAt); err != nil {
 			return nil, err
 		}
+		r.Data = cardData(data)
 		out = append(out, &r)
 	}
 	return out, rows.Err()
+}
+
+// reportLead is how much of a markdown report's content a listing
+// carries: enough for the first line a card shows.
+const reportLead = 600
+
+// cardData keeps the parts of a report's data its card reads: the
+// takeaway, the preview and the first item. The blocks, the sources and the
+// rest are the document's.
+func cardData(data string) json.RawMessage {
+	var d map[string]json.RawMessage
+	if data == "" || json.Unmarshal([]byte(data), &d) != nil {
+		return nil
+	}
+	out := map[string]json.RawMessage{}
+	for _, k := range []string{"takeaway", "preview"} {
+		if v, ok := d[k]; ok {
+			out[k] = v
+		}
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(d["items"], &items) == nil && len(items) > 0 {
+		out["items"], _ = json.Marshal(items[:1])
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(out)
+	return b
 }
 
 func (s *Store) DeleteReport(ctx context.Context, userID int64, id string) (bool, error) {
@@ -430,5 +672,8 @@ func (s *Store) DeleteReport(ctx context.Context, userID int64, id string) (bool
 		return false, err
 	}
 	n, _ := res.RowsAffected()
-	return n > 0, nil
+	if n > 0 {
+		err = s.DeleteRecall(ctx, userID, "report:"+id)
+	}
+	return n > 0, err
 }

@@ -1,0 +1,18 @@
+/* The browser gallery's frames (development only): a panel the size the
+   stage would give it. */
+
+.bp-demo { height: 640px; max-width: 980px; display: flex; flex-direction: column; }
+.bp-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--s6); }
+.bp-row > * { min-width: 0; }
+.bp-row .bp-demo { height: 420px; }
+.bp-count { margin: 0 0 var(--s3); font: 500 var(--t-small) var(--font); color: var(--text-2); }
+
+@media (max-width: 900px) {
+  .bp-row { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .bp-demo, .bp-row .bp-demo { height: auto; }
+  .bp-demo .panel { flex: none; }
+}
+.bp-log { flex: none; display: flex; flex-direction: column; gap: var(--s1); margin: var(--s3) 0 0; padding: 0; list-style: none; font: 400 var(--t-micro) var(--font-mono); color: var(--text-2); }
+.bp-log li:first-child { color: var(--ink); }

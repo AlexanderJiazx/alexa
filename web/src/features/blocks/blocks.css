@@ -1,0 +1,123 @@
+/* Generative UI blocks (WP-04, Appendix A.5): the list and the parts every
+   block shares. Each block type has its own stylesheet next to its
+   renderer. Blocks size themselves by their container, never the
+   viewport: the same block shows in the 380px docked column, the 680px
+   exchange, the panel and a report. Nothing here scrolls vertically. */
+
+.blocks { container: blocks / inline-size; align-self: stretch; width: 100%; min-width: 0; display: flex; flex-direction: column; gap: var(--s4); animation: pRise var(--d-3) var(--ease-out) both; }
+.blocks[data-place='report'] { gap: var(--s6); margin-top: var(--s6); }
+.blocks[data-place='panel'] { gap: var(--s6); }
+.b { min-width: 0; display: flex; flex-direction: column; gap: var(--s2); }
+
+/* A block's heading: title, a quiet count or range, Expand. */
+.b-head { display: flex; align-items: center; gap: var(--s2); min-height: 28px; }
+.b-title { min-width: 0; font: 600 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-meta { flex: none; font: 400 var(--t-small) var(--font); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.b-head .b-expand { margin: -4px -8px -4px auto; }
+.blocks[data-place='report'] .b-title { font: 600 var(--t-title) var(--font); letter-spacing: var(--tr-title); white-space: normal; text-wrap: balance; }
+.blocks[data-place='report'] .b-head { align-items: baseline; }
+
+/* A surface for blocks that are one thing: a table, a timeline, a list. */
+.b-surface { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+
+
+/* What a block that can't be drawn shows instead. */
+.b-fallback { display: flex; align-items: flex-start; gap: var(--s2); padding: var(--s3) var(--s4); border-radius: var(--r-md); background: var(--tile); font: 400 var(--t-small) var(--font); color: var(--text-2); overflow-wrap: anywhere; }
+.b-fallback svg.i { flex: none; margin-top: 1px; color: var(--text-3); }
+
+/* A reply once it's been chosen, and the answer of a past exchange. */
+.b-chosen { display: inline-flex; align-items: center; gap: var(--s1); height: 32px; padding: 0 var(--s3); border-radius: var(--r-sm); background: var(--tile); color: var(--ink); font: 500 var(--t-small) var(--font); white-space: nowrap; }
+.b-answered { margin: 0; font: 400 var(--t-small) var(--font); color: var(--text-3); overflow-wrap: break-word; }
+.b-answered b { font-weight: 600; color: var(--text-2); }
+.b-answered q { color: var(--text-2); quotes: '“' '”'; }
+
+/* A run of short facts, each after a middle dot. */
+.b-dot:not(:first-child)::before { content: '·'; margin-right: var(--s2); color: var(--text-3); }
+
+/* ---------- money, ratings, facts ---------- */
+.money { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.money .cur { font-size: .86em; margin-right: .02em; }
+.b-price { display: inline-flex; align-items: baseline; flex-wrap: wrap; column-gap: var(--s2); }
+.b-price .now { font: 600 var(--t-body) var(--font); color: var(--ink); }
+.b-price .per, .b-price .was { font: 400 var(--t-small) var(--font); color: var(--text-3); }
+.b-price .per { margin-left: calc(-1 * var(--s1)); }
+.b-price .off { font: 600 var(--t-micro) var(--font); color: var(--ok); font-variant-numeric: tabular-nums; }
+.b-rating { display: inline-flex; align-items: center; gap: var(--s1); font: 400 var(--t-small) var(--font); color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.b-rating .star { fill: var(--ink); stroke: none; margin-top: -1px; }
+.b-rating b { font-weight: 600; color: var(--ink); }
+.b-rating .of, .b-rating .cnt { color: var(--text-3); }
+.b-facts { align-self: stretch; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2) var(--s3); margin: var(--s1) 0 0; padding-top: var(--s2); border-top: 1px solid var(--line); }
+.b-facts dt { font: 400 var(--t-micro) var(--font); letter-spacing: var(--tr-micro); color: var(--text-3); }
+.b-facts dd { margin: 0; font: 500 var(--t-small) var(--font); color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+/* ---------- images: a fixed box, a skeleton, a fade in ---------- */
+.b-img { position: relative; display: block; width: 100%; aspect-ratio: var(--ratio, 1); overflow: hidden; border-radius: var(--r-sm); background: var(--tile); }
+.b-img::after { content: ''; position: absolute; inset: 0; border-radius: inherit; border: 1px solid var(--line); pointer-events: none; }
+.b-img img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--d-3) var(--ease-out); }
+.b-img.ok img { opacity: 1; }
+.b-img.loading { background: linear-gradient(90deg, var(--tile) 30%, color-mix(in oklab, var(--tile), var(--surface) 55%) 50%, var(--tile) 70%) 0 0 / 200% 100%; animation: pShimmer 1.6s linear infinite; }
+/* Product shots are photographed on white: in light they melt into the
+   tile; in dark they sit on a white well, as on a shop's page. */
+.b-img.contain img { object-fit: contain; padding: 8%; mix-blend-mode: multiply; }
+:root[data-theme=dark] .b-img.contain.ok { background: var(--canvas); }
+:root[data-theme=dark] .b-img.contain img { mix-blend-mode: normal; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme=light]) .b-img.contain.ok { background: var(--canvas); }
+  :root:not([data-theme=light]) .b-img.contain img { mix-blend-mode: normal; }
+}
+.b-img-none { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-4); }
+.b-mono { display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 1; border-radius: var(--r-sm); background: var(--tile); border: 1px solid var(--line); color: var(--text-3); font: 400 var(--t-head) var(--font-display); }
+.b-img-none .b-mono { height: 100%; aspect-ratio: auto; border-radius: 0; border: 0; }
+
+/* ---------- carousel ---------- */
+.b-carousel { position: relative; min-width: 0; }
+.b-track {
+  --fl: 0px;
+  --fr: 0px;
+  list-style: none;
+  margin: calc(-1 * var(--s1)) 0 calc(-1 * var(--s2));
+  padding: var(--s1) 0 var(--s2);
+  display: flex;
+  gap: var(--s3);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, transparent, black var(--fl), black calc(100% - var(--fr)), transparent);
+  mask-image: linear-gradient(to right, transparent, black var(--fl), black calc(100% - var(--fr)), transparent);
+}
+.b-track::-webkit-scrollbar { display: none; }
+.b-track:focus-visible { outline-offset: 4px; border-radius: var(--r-md); }
+/* Only the far edge fades: snapping always leaves a whole card at the near
+   one. */
+.b-carousel:not(.at-end) .b-track { --fr: var(--s10); }
+.b-arrow { position: absolute; top: calc(50% - 18px); z-index: 2; width: 36px; height: 36px; padding: 0; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: var(--r-full); background: var(--surface); color: var(--ink); opacity: 0; transition: opacity var(--d-2) var(--ease-out), transform var(--d-1); }
+.b-arrow[hidden] { display: none; }
+.b-arrow.prev { left: var(--s2); }
+.b-arrow.next { right: var(--s2); }
+.b-arrow:active { transform: scale(.97); }
+.b-carousel:focus-within .b-arrow { opacity: 1; }
+@media (hover: hover) {
+  .b-carousel:hover .b-arrow { opacity: 1; }
+}
+@media (hover: none), (pointer: coarse) {
+  .b-arrow { display: none; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .b-track { scroll-behavior: smooth; }
+}
+
+/* Each block's parts enter together, a beat after the message. */
+@media (prefers-reduced-motion: no-preference) {
+  .blocks > .b:nth-child(2) { animation: pRise var(--d-3) var(--ease-out) var(--stagger) both; }
+  .blocks > .b:nth-child(3) { animation: pRise var(--d-3) var(--ease-out) calc(2 * var(--stagger)) both; }
+}
+
+/* ---------- touch ---------- */
+/* The receipt's Copy is 28px tall: on touch it reaches past its edges to
+   44px. */
+@media (pointer: coarse) {
+  .b-copy { position: relative; }
+  .b-copy::after { content: ''; position: absolute; inset: -8px; }
+}

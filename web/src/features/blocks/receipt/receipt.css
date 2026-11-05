@@ -1,0 +1,48 @@
+/* Receipt (WP-04): a ticket. Two framed halves; the notches are cut with
+   masks, so the paper shows through whatever the receipt sits on. */
+
+.b-receipt { --notch: 9px; max-width: 440px; }
+.b-rc-top, .b-rc-stub { background: var(--surface); border: 1px solid var(--line); }
+.b-rc-top {
+  padding: var(--s4) var(--s4) var(--s3);
+  border-bottom: 0;
+  border-radius: var(--r-md) var(--r-md) 0 0;
+  -webkit-mask: radial-gradient(circle at 0 100%, transparent var(--notch), black calc(var(--notch) + .5px)) left / 51% 100% no-repeat, radial-gradient(circle at 100% 100%, transparent var(--notch), black calc(var(--notch) + .5px)) right / 51% 100% no-repeat;
+  mask: radial-gradient(circle at 0 100%, transparent var(--notch), black calc(var(--notch) + .5px)) left / 51% 100% no-repeat, radial-gradient(circle at 100% 100%, transparent var(--notch), black calc(var(--notch) + .5px)) right / 51% 100% no-repeat;
+}
+.b-rc-stub {
+  padding: var(--s3) var(--s4) var(--s4);
+  border-top: 1.5px dashed var(--line-strong);
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  -webkit-mask: radial-gradient(circle at 0 0, transparent var(--notch), black calc(var(--notch) + .5px)) left / 51% 100% no-repeat, radial-gradient(circle at 100% 0, transparent var(--notch), black calc(var(--notch) + .5px)) right / 51% 100% no-repeat;
+  mask: radial-gradient(circle at 0 0, transparent var(--notch), black calc(var(--notch) + .5px)) left / 51% 100% no-repeat, radial-gradient(circle at 100% 0, transparent var(--notch), black calc(var(--notch) + .5px)) right / 51% 100% no-repeat;
+}
+
+.b-rc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s3); }
+.b-rc-who { min-width: 0; display: flex; flex-direction: column; }
+.b-rc-who b { font: 600 var(--t-body) var(--font); letter-spacing: var(--tr-body); color: var(--ink); overflow-wrap: anywhere; }
+.b-rc-who span { font: 400 var(--t-small) var(--font); color: var(--text-3); }
+.b-rc-head .pill svg.i { margin-left: -2px; }
+
+.b-rc-lines { margin: var(--s3) 0 0; display: flex; flex-direction: column; gap: var(--s2); }
+.b-rc-lines > div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s4); font: 400 var(--t-small) var(--font); }
+.b-rc-lines dt { min-width: 0; color: var(--text-2); overflow-wrap: anywhere; }
+.b-rc-lines dd { margin: 0; flex: none; max-width: 60%; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+.b-rc-total { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); }
+.b-rc-total > span:first-child { font: 500 var(--t-small) var(--font); color: var(--text-2); }
+.b-rc-total .money { font: 600 var(--t-head) var(--font); letter-spacing: var(--tr-head); color: var(--ink); }
+.st-cancelled .b-rc-total .money { color: var(--text-3); text-decoration: line-through; text-decoration-thickness: 1.5px; }
+
+.b-rc-ref { display: flex; align-items: center; gap: var(--s2); margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
+.b-rc-ref .label { font: 500 var(--t-micro) var(--font); letter-spacing: var(--tr-caps); text-transform: uppercase; color: var(--text-3); }
+.b-rc-ref code { font: 600 var(--t-body) var(--font-mono); letter-spacing: .06em; color: var(--ink); overflow-wrap: anywhere; }
+.b-copy { margin-left: auto; height: 28px; display: inline-flex; align-items: center; gap: var(--s1); padding: 0 var(--s2); border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text-2); font: 500 var(--t-small) var(--font); cursor: pointer; transition: background-color var(--d-1), color var(--d-1); }
+@media (hover: hover) {
+  .b-copy:hover { background: var(--hover); color: var(--ink); }
+}
+.b-copy:active { transform: scale(.97); }
+
+@container blocks (max-width: 379px) {
+  .b-rc-total .money { font: 600 var(--t-title) var(--font); letter-spacing: var(--tr-title); }
+}

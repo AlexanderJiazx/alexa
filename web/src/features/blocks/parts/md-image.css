@@ -1,0 +1,8 @@
+/* A markdown image that wasn't loaded (MdImage): what and where it was,
+   quietly, in the run of the text. The report's prose and markdown blocks
+   both use it. */
+.prose .md-img-off { display: inline-flex; align-items: center; gap: var(--s1); max-width: 100%; padding: 0 var(--s2); border-radius: var(--r-xs); background: var(--tile); font: 400 var(--t-small) var(--font); color: var(--text-3); vertical-align: baseline; }
+.prose .md-img-off > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prose .md-img-host { color: var(--text-3); }
+.prose .md-img-host::before { content: '· '; }
+.prose img { max-width: 100%; height: auto; border-radius: var(--r-sm); }

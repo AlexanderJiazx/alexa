@@ -162,6 +162,7 @@ func tail(s string, n int) string {
 
 type testEnv struct {
 	srv   *httptest.Server
+	api   *Server
 	st    *store.Store
 	envs  *userenv.Envs
 	cfg   *config.Config
@@ -217,9 +218,10 @@ func newTestServer(t *testing.T, chrome ...string) *testEnv {
 	}
 	rt := agent.New(ctx, cfg, st, llm.New(cfg.BaseURL, cfg.APIKey), br, envs, h, n, v)
 	static := fstest.MapFS{"index.html": {Data: []byte("<html>alexa</html>")}}
-	srv := httptest.NewServer(New(cfg, st, rt, h, envs, n, &voice.Service{}, br, v, static).Handler())
+	api := New(cfg, st, rt, h, envs, n, &voice.Service{}, br, v, static)
+	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(func() { srv.Close(); rt.Shutdown(); br.CloseAll(); cancel(); st.Close() })
-	return &testEnv{srv: srv, st: st, envs: envs, cfg: cfg, model: fm}
+	return &testEnv{srv: srv, api: api, st: st, envs: envs, cfg: cfg, model: fm}
 }
 
 type client struct {
@@ -580,7 +582,9 @@ func TestCompaction(t *testing.T) {
 			if !strings.Contains(string(req.Input[0]), "[Summary of the earlier part") || !strings.Contains(string(req.Input[0]), "SUMMARY: they asked") {
 				t.Errorf("summary isn't first: %s", req.Input[0])
 			}
-			if strings.Contains(in, "flights to Lisbon please") {
+			// The summary (Input[0]) quotes the user's words in its anchors;
+			// the message itself is no longer replayed after it.
+			if strings.Contains(inputText(&llm.Request{Input: req.Input[1:]}), "flights to Lisbon please") {
 				t.Errorf("the folded message is still replayed: %s", in)
 			}
 			return nil, 300
@@ -619,7 +623,7 @@ func TestCompaction(t *testing.T) {
 		t.Fatalf("compactions after manual compact = %d, want %d", s.State.Compactions, before+1)
 	}
 	fm.script(func(_ context.Context, req *llm.Request) ([]any, int64) {
-		if in := inputText(req); strings.Contains(in, "book the cheapest hotel") || !strings.Contains(in, "] thanks") {
+		if in := inputText(&llm.Request{Input: req.Input[1:]}); strings.Contains(in, "book the cheapest hotel") || !strings.Contains(in, "] thanks") {
 			t.Errorf("after compacting on demand the input is: %s", in)
 		}
 		return nil, 300
@@ -884,9 +888,14 @@ func TestSignIn(t *testing.T) {
 		},
 		reply(1200),
 	)
+	ws := alice.dial("")
 	if code, m, _ := alice.do("POST", "/api/signin", map[string]any{"username": " alice@example.com ", "password": password, "save": true}, true); code != 200 {
 		t.Fatalf("sign in: %d %v", code, m)
 	}
+	// Saved, so a Logins sheet open elsewhere fetches it again.
+	readUntil(t, ws, func(ev wsEvent) bool {
+		return ev.Type == "changed" && strings.Contains(string(ev.Data), `"what":"logins"`)
+	})
 	s = alice.wait("idle")
 	if card := last(s.Feed, "login"); card.Status != "answered" {
 		t.Fatalf("login card still %q", card.Status)
@@ -986,7 +995,8 @@ func TestSignIn(t *testing.T) {
 }
 
 // A scheduled job that comes up while Alexa waits for the user isn't taken
-// for their answer.
+// for their answer and doesn't close the question: it waits, and runs once
+// they've answered (M3).
 func TestScheduleWhileWaiting(t *testing.T) {
 	e := newTestServer(t)
 	fm := e.model
@@ -999,17 +1009,24 @@ func TestScheduleWhileWaiting(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("create schedule: %d %v", code, m)
 	}
+	c.post("/api/schedules/"+fmt.Sprint(m["id"])+"/run", nil)
+	time.Sleep(100 * time.Millisecond)
+	s := c.wait("needs")
+	if l := last(s.Feed, "login"); l == nil || l.Status != "open" {
+		t.Fatalf("the job closed the question: %+v", l)
+	}
 	fm.script(
 		func(_ context.Context, req *llm.Request) ([]any, int64) {
 			in := inputText(req)
-			if !strings.Contains(in, "hasn't answered yet") || !strings.Contains(in, "Remind me to water the plants") || strings.Contains(in, "The user replied") || strings.Contains(in, "replied instead") {
-				t.Errorf("the scheduled job reached Alexa as: …%s", tail(in, 500))
+			answer, job := strings.Index(in, "replied instead: never mind"), strings.Index(in, "Remind me to water the plants")
+			if answer < 0 || job < 0 || answer > job {
+				t.Errorf("after the answer Alexa read: …%s", tail(in, 600))
 			}
-			return []any{fn("say", map[string]any{"text": "Time to water the plants."})}, 900
+			return []any{fn("say", map[string]any{"text": "Okay. And it’s time to water the plants."})}, 900
 		},
 		reply(900),
 	)
-	c.post("/api/schedules/"+fmt.Sprint(m["id"])+"/run", nil)
+	c.send("never mind")
 	c.wait("idle")
 }
 

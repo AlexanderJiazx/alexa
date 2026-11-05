@@ -1,0 +1,12 @@
+/* The report gallery's own layout (development only): a panel of the size
+   it has beside the exchange on a laptop. */
+.g-rep-stage { height: 760px; max-width: 1000px; display: flex; flex-direction: column; }
+.g-rep-stage.short { height: 420px; flex: 1 1 320px; }
+.g-rep-pair { display: flex; flex-wrap: wrap; gap: var(--s4); max-width: 1000px; }
+.g-rep-cards { min-height: 0; justify-content: flex-start; max-width: 460px; margin: 0; }
+.g-rep-sent { max-width: 1000px; margin: var(--s3) 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--s2); font: 400 var(--t-small) var(--font); }
+.g-rep-sent li { align-self: flex-end; padding: var(--s2) var(--s3); border-radius: var(--r-md); background: var(--ink); color: var(--on-ink); }
+.g-rep-sent li.none { align-self: flex-start; padding: 0; background: none; color: var(--text-3); }
+/* full: the panel grows to its whole document, for a look at all of it. */
+.g-rep-stage.full { height: auto; }
+.g-rep-stage.full .panel-body { overflow: visible; }

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -9,26 +10,31 @@ import (
 
 	"github.com/robfig/cron/v3"
 
+	"alexagent/internal/hub"
 	"alexagent/internal/store"
 )
 
 var cronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 
 // Scheduler runs users' schedules: cron specs evaluated in each user's
-// timezone, and one-off runs.
+// timezone, and one-off runs. Its ticker also runs the storage sweep
+// (Runtime.Sweep): soon after start, then every sweepEvery.
 type Scheduler struct {
-	rt *Runtime
-	mu sync.Mutex
-	c  *cron.Cron
+	rt     *Runtime
+	mu     sync.Mutex
+	c      *cron.Cron
+	tries  map[string]int // one-offs that failed to start, and how often
+	reload sync.Mutex     // one Reload at a time: an older table never replaces a newer one
 }
 
-func newScheduler(rt *Runtime) *Scheduler { return &Scheduler{rt: rt} }
+func newScheduler(rt *Runtime) *Scheduler { return &Scheduler{rt: rt, tries: map[string]int{}} }
 
 func (s *Scheduler) Start(ctx context.Context) {
 	s.Reload(ctx)
 	go func() {
 		tick := time.NewTicker(20 * time.Second)
 		defer tick.Stop()
+		var swept time.Time // zero: the first tick sweeps
 		for {
 			select {
 			case <-ctx.Done():
@@ -40,6 +46,10 @@ func (s *Scheduler) Start(ctx context.Context) {
 				return
 			case <-tick.C:
 				s.runDueOneOffs(ctx)
+				if time.Since(swept) >= sweepEvery {
+					swept = time.Now()
+					go s.rt.Sweep(ctx) // not in the way of the next one-off
+				}
 			}
 		}
 	}()
@@ -49,8 +59,14 @@ func (s *Scheduler) spec(sc *store.Schedule, loc *time.Location) string {
 	return "CRON_TZ=" + loc.String() + " " + sc.Cron
 }
 
-// Reload rebuilds the cron table from the store.
+// Reload rebuilds the cron table from the store. It doesn't end with ctx:
+// the tool call or request that changed a schedule may be cut short (a
+// Stop), and the table must still follow the change (BH-8).
 func (s *Scheduler) Reload(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	s.reload.Lock()
+	defer s.reload.Unlock()
 	list, err := s.rt.st.ListSchedules(ctx, 0)
 	if err != nil {
 		slog.Error("load schedules", "err", err)
@@ -70,7 +86,7 @@ func (s *Scheduler) Reload(ctx context.Context) {
 			users[sc.UserID] = u
 		}
 		id := sc.ID
-		if _, err := c.AddFunc(s.spec(sc, userLoc(u)), func() { s.fire(id) }); err != nil {
+		if _, err := c.AddFunc(s.spec(sc, userLoc(u)), func() { s.fire(id, false) }); err != nil {
 			slog.Warn("bad schedule", "id", sc.ID, "err", err)
 		}
 	}
@@ -92,13 +108,17 @@ func (s *Scheduler) runDueOneOffs(ctx context.Context) {
 	now := time.Now().UnixMilli()
 	for _, sc := range list {
 		if sc.Enabled && sc.RunAt > 0 && sc.RunAt <= now && sc.LastRun == 0 {
+			// Disabled first, so it can't fire twice; one that fails to
+			// start is enabled again for another try (failed).
 			_ = s.rt.st.SetScheduleEnabled(ctx, sc.UserID, sc.ID, false)
-			s.fire(sc.ID)
+			s.fire(sc.ID, true)
 		}
 	}
 }
 
-func (s *Scheduler) fire(id string) {
+// fire starts a schedule's job. due says the one-off's time came, rather
+// than the user asking for it now.
+func (s *Scheduler) fire(id string, due bool) {
 	ctx := context.Background()
 	sc, err := s.rt.st.GetSchedule(ctx, id)
 	if err != nil {
@@ -110,14 +130,53 @@ func (s *Scheduler) fire(id string) {
 	}
 	slog.Info("running schedule", "id", sc.ID, "name", sc.Name, "user", u.Username)
 	if err := s.rt.Send(ctx, u, Message{Text: sc.Prompt, Source: "schedule", Label: sc.Name}); err != nil {
-		slog.Error("schedule run failed", "id", sc.ID, "err", err)
+		s.failed(ctx, u, sc, due, err)
 		return
 	}
+	s.mu.Lock()
+	delete(s.tries, sc.ID)
+	s.mu.Unlock()
 	_ = s.rt.st.MarkScheduleRun(ctx, sc.ID)
 }
 
+// oneOffTries is how often a one-off whose time came is tried, a tick
+// apart, before it's left for the user to run.
+const oneOffTries = 3
+
+// failed handles a job that couldn't start (BH-8). A one-off whose time
+// came is enabled again, so the next tick tries it, up to oneOffTries
+// times; after that it stays disabled and not run, for the user to run
+// from their schedules. The user hears of a job that didn't run, then or
+// at once: a recurring one runs again at its next time.
+func (s *Scheduler) failed(ctx context.Context, u *store.User, sc *store.Schedule, due bool, err error) {
+	slog.Error("schedule run failed", "id", sc.ID, "err", err)
+	oneOff := sc.RunAt > 0 && sc.LastRun == 0
+	if due && oneOff {
+		s.mu.Lock()
+		s.tries[sc.ID]++
+		again := s.tries[sc.ID] < oneOffTries
+		if !again {
+			delete(s.tries, sc.ID)
+		}
+		s.mu.Unlock()
+		if again {
+			_ = s.rt.st.SetScheduleEnabled(ctx, u.ID, sc.ID, true)
+			return
+		}
+	}
+	body := fmt.Sprintf("“%s” couldn't start (%s).", sc.Name, sanitize(err.Error(), 160))
+	switch {
+	case sc.Cron != "":
+		body += " It will run again at its next time."
+	case oneOff:
+		body += " Run it from your schedules when you're ready."
+	}
+	_ = s.rt.notify(ctx, u, "", "A scheduled job didn't run", body, true, false)
+	s.rt.hub.Publish(u.ID, hub.Changed("schedules"))
+}
+
 // RunNow fires a schedule immediately.
-func (s *Scheduler) RunNow(id string) { go s.fire(id) }
+func (s *Scheduler) RunNow(id string) { go s.fire(id, false) }
 
 // NextRun computes when a schedule will next run.
 func (s *Scheduler) NextRun(sc *store.Schedule, loc *time.Location) time.Time {

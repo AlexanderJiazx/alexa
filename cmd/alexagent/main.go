@@ -44,6 +44,10 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
 	cfg := config.Load()
+	dropSecrets()
+	if err := hideEnviron(); err != nil {
+		slog.Warn("can't hide the environment the server started with", "err", err)
+	}
 	// Everything the server writes is private to it; per-user processes
 	// (Chrome, the shell tool) run under their own UIDs and must not be able
 	// to read the database or other users' data.
@@ -114,6 +118,19 @@ func main() {
 			}
 			return rt.LastURL(userID)
 		},
+		// The browser stays up while the user has it, or while Alexa waits
+		// for them (a question, a take-over, a sign-in): the page she left
+		// is what they come back to.
+		KeepAlive: func(userID int64) bool {
+			if rt != nil && rt.InControl(userID) {
+				return true
+			}
+			ss, err := st.GetSession(ctx, userID)
+			return err == nil && ss.Status == "needs"
+		},
+		// The Files list refreshes when a download lands, also one that
+		// finishes while the user has the browser.
+		Downloaded: func(userID int64) { h.Publish(userID, hub.Changed("files")) },
 	}, func(userID int64) browser.UserEnv {
 		e := envs.For(userID)
 		return browser.UserEnv{UserID: userID, ProfileDir: e.Profile, DownloadDir: e.Downloads, HomeDir: e.Home, UID: e.UID, GID: e.GID}
@@ -150,6 +167,34 @@ func main() {
 	defer cancel()
 	_ = srv.Shutdown(sctx)
 	rt.Shutdown()
+}
+
+// dropSecrets takes the API keys and other secrets out of the process
+// environment once the config holds them, so nothing started later (Chrome,
+// the shell tool, PDF and image tools) can inherit them. It only changes
+// Go's copy: the environment the server started with is still in /proc
+// (hideEnviron).
+func dropSecrets() {
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if isSecret(k) {
+			_ = os.Unsetenv(k)
+		}
+	}
+}
+
+func isSecret(name string) bool {
+	k := strings.ToUpper(name)
+	switch k {
+	case "META_MODEL_API_KEY", "MODEL_API_KEY", "RESEND_API_KEY":
+		return true
+	}
+	for _, s := range []string{"_API_KEY", "_SECRET", "_TOKEN", "_PASSWORD"} {
+		if strings.HasSuffix(k, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func cliCreateUser(st *store.Store, envs *userenv.Envs, spec string) error {

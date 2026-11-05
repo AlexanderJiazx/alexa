@@ -1,0 +1,50 @@
+/* The design system's gallery page (development only). */
+
+.ug-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+.ug-col { display: flex; flex-direction: column; gap: var(--s3); }
+.ug-stack { display: flex; flex-direction: column; gap: var(--s5); max-width: 680px; }
+.ug-note { font: 400 var(--t-small) var(--font); color: var(--text-3); }
+
+/* Type scale */
+.ug-type { display: grid; grid-template-columns: 112px 1fr; gap: var(--s4) var(--s5); align-items: baseline; }
+.ug-type dt { font: 500 var(--t-micro) var(--font); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.ug-type dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.ug-italic { font-style: italic; }
+.ug-mono { font-family: var(--font-mono); }
+.ug-grow { flex: 1; }
+
+/* Colours, in both themes side by side: light-dark() follows each
+   column's color-scheme. */
+.ug-themes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--s4); }
+.ug-theme { padding: var(--s5); border-radius: var(--r-lg); background: var(--bg); color: var(--ink); border: 1px solid var(--line); }
+.ug-theme.light { color-scheme: light; }
+.ug-theme.dark { color-scheme: dark; }
+.ug-theme h3 { margin-bottom: var(--s4); font: 600 var(--t-small) var(--font); color: var(--text-2); }
+.ug-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: var(--s3); }
+.ug-swatch { display: flex; flex-direction: column; gap: var(--s1); font: 500 var(--t-micro) var(--font); color: var(--text-2); }
+.ug-chip { height: 40px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--sw); }
+.ug-text { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s5); }
+.ug-text p { font: 400 var(--t-body) var(--font); }
+.ug-on-s1 { margin-top: var(--s4); padding: var(--s4); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
+
+/* Radii and spacing */
+.ug-radii { display: flex; flex-wrap: wrap; gap: var(--s4); }
+.ug-radii > div { border-radius: var(--r); width: 72px; height: 72px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: var(--s2); background: var(--tile); border: 1px solid var(--line-strong); font: 500 var(--t-micro) var(--font); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.ug-space { display: flex; flex-direction: column; gap: var(--s2); }
+.ug-space > div { display: flex; align-items: center; gap: var(--s3); font: 500 var(--t-micro) var(--font); color: var(--text-3); font-variant-numeric: tabular-nums; }
+.ug-space i { display: block; height: 8px; border-radius: 2px; background: var(--ink); width: var(--w); }
+
+/* Icons */
+.ug-icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: var(--s2); }
+.ug-icons > div { display: flex; flex-direction: column; align-items: center; gap: var(--s2); padding: var(--s3) var(--s1); border-radius: var(--r-sm); color: var(--ink); font: 400 var(--t-micro) var(--font); }
+.ug-icons > div span { color: var(--text-3); }
+
+/* Presence */
+.ug-marks { display: flex; flex-wrap: wrap; gap: var(--s6); }
+.ug-marks > div { display: flex; align-items: center; gap: var(--s3); font: 400 var(--t-small) var(--font); color: var(--text-2); }
+
+/* A whole screen in a box. */
+.ug-screen { position: relative; height: 640px; overflow: hidden; border-radius: var(--r-lg); background: var(--bg); border: 1px solid var(--line); }
+.ug-menu-host { position: relative; height: 380px; }
+.ug-menu-host .menu { top: 52px; left: 0; }
+.ug-toasts { display: flex; flex-direction: column; gap: var(--s2); max-width: 420px; }

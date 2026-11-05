@@ -398,3 +398,106 @@ func TestPopupClosesItself(t *testing.T) {
 		t.Errorf("the tab can't navigate after the popup closed: %v", err)
 	}
 }
+
+// A popup opened from a popup is followed too, and each hands the tab back
+// to the page that opened it when it closes (B04).
+func TestPopupFromPopup(t *testing.T) {
+	tab, port := newFeatureBrowser(t, map[string]string{
+		"/":   `<!doctype html><title>Main</title><body><a href="/p1" target="_blank">Open first</a>`,
+		"/p1": `<!doctype html><title>First popup</title><body><a href="/p2" target="_blank">Open second</a>`,
+		"/p2": `<!doctype html><title>Second popup</title><body><button onclick="window.close()">Close</button>`,
+	})
+	if err := tab.Navigate(fmt.Sprintf("http://127.0.0.1:%d/", port)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tab.Click(indexOf(t, mustState(t, tab), "Open first", 0)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	st := mustState(t, tab)
+	if st.Title != "First popup" {
+		t.Fatalf("the first popup wasn't followed: %q", st.Title)
+	}
+	if _, err := tab.Click(indexOf(t, st, "Open second", 0)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if st = mustState(t, tab); st.Title != "Second popup" {
+		t.Fatalf("the popup opened from a popup wasn't followed; the tab is on %q", st.Title)
+	}
+	if _, err := tab.Click(indexOf(t, st, "Close", 0)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if st = mustState(t, tab); st.Title != "First popup" {
+		t.Errorf("after the second popup closed, the tab is on %q, want the first popup", st.Title)
+	}
+}
+
+// Typing into fields already in view doesn't scroll the page, so the
+// elements around them stay where the model saw them and a form can be
+// filled in one batch (H2). One out of view, or under a sticky header, is
+// still brought into view to be clicked.
+func TestActionsScrollOnlyWhenNeeded(t *testing.T) {
+	var form strings.Builder
+	form.WriteString(`<!doctype html><title>Form</title><body style="margin:0;font:16px sans-serif">`)
+	for i := 0; i < 30; i++ {
+		fmt.Fprintf(&form, `<div style="height:60px"><label>Field %d <input name=f%d></label></div>`, i, i)
+	}
+	form.WriteString(`<div style="height:60px"><label>When <input type=date name=when></label></div>`)
+	form.WriteString(`<div style="height:2000px"></div></body>`)
+	tab, port := newFeatureBrowser(t, map[string]string{"/": form.String()})
+	if err := tab.Navigate(fmt.Sprintf("http://127.0.0.1:%d/", port)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tab.eval(`window.scrollTo(0, 1200)`, nil); err != nil {
+		t.Fatal(err)
+	}
+	scrollY := func() float64 {
+		var y float64
+		if err := tab.eval(`window.scrollY`, &y); err != nil {
+			t.Fatal(err)
+		}
+		return y
+	}
+	st := mustState(t, tab)
+	for _, f := range []string{"f23", "f25", "f27"} {
+		if _, err := tab.Type(indexOf(t, st, "name="+f, 0), "Ana", true, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tab.Type(indexOf(t, st, "name=when", 0), "2026-11-12", true, false); err != nil {
+		t.Fatal(err)
+	}
+	if y := scrollY(); y != 1200 {
+		t.Errorf("filling fields in view scrolled the page to %v", y)
+	}
+	// A header that sticks over the top fields once the page is scrolled.
+	if err := tab.eval(`document.body.insertAdjacentHTML('afterbegin', '<div style="position:fixed;top:0;left:0;right:0;height:200px;background:#eee;z-index:9">Header</div>')`, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tab.Type(indexOf(t, st, "name=f22", 0), "Bo", true, false); err != nil {
+		t.Fatal(err)
+	}
+	if y := scrollY(); y == 1200 {
+		t.Error("a field under the sticky header wasn't scrolled into the clear")
+	}
+	var v string
+	if err := tab.eval(`document.querySelector('[name=f22]').value`, &v); err != nil || v != "Bo" {
+		t.Errorf("f22 = %q, %v", v, err)
+	}
+	// One scrolled out of view since the state is brought back to be typed
+	// into.
+	if err := tab.eval(`window.scrollTo(0, 0)`, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tab.Type(indexOf(t, st, "name=f26", 0), "Cy", true, false); err != nil {
+		t.Fatal(err)
+	}
+	if y := scrollY(); y == 0 {
+		t.Error("a field out of view wasn't scrolled into view")
+	}
+	if err := tab.eval(`document.querySelector('[name=f26]').value`, &v); err != nil || v != "Cy" {
+		t.Errorf("f26 = %q, %v", v, err)
+	}
+}

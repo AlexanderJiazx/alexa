@@ -42,8 +42,8 @@ func TestReadFileShowsImages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b := shown.Bounds(); b.Dx() != maxViewSide || b.Dy() != 533 {
-		t.Errorf("shown at %v, want %dx533", b, maxViewSide)
+	if b := shown.Bounds(); b.Dx() != maxViewSide || b.Dy() != 1000*maxViewSide/3000 {
+		t.Errorf("shown at %v, want %dx%d", b, maxViewSide, 1000*maxViewSide/3000)
 	}
 }
 

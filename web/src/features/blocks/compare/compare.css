@@ -1,0 +1,43 @@
+/* Compare (WP-04): a decision grid. Qualities stay pinned on the left, the
+   pick's column sits on a quiet tile, the best value of each row gets a
+   tick on --ok-bg. Below 440px it becomes a card per option. */
+
+.b-compare .b-grid { table-layout: fixed; min-width: calc(128px + var(--n, 3) * 120px); }
+.b-compare .b-grid tr > :first-child { position: sticky; left: 0; z-index: 1; width: 128px; border-right: 1px solid var(--line); }
+.b-compare .b-corner { border-bottom-color: var(--line-strong); }
+.b-compare thead th { vertical-align: bottom; white-space: normal; }
+.b-compare thead th .b-pick { display: flex; width: max-content; margin-bottom: var(--s2); }
+.b-cmp-name { display: block; font: 600 var(--t-small) var(--font); color: var(--ink); letter-spacing: 0; overflow-wrap: anywhere; }
+.b-cmp-price { display: block; margin-top: 2px; font: 400 var(--t-small) var(--font); color: var(--text-2); }
+.b-compare tbody th { color: var(--text-2); font-weight: 400; }
+.b-compare .is-pick { background-color: var(--tile); }
+.b-cell-v { display: inline-flex; align-items: center; gap: var(--s1); }
+.b-compare td.best .b-cell-v { margin: -2px calc(-1 * var(--s2)); padding: 2px var(--s2); border-radius: var(--r-xs); background: var(--ok-bg); color: var(--ok); font-weight: 600; }
+.b-compare td.best svg.i { flex: none; }
+/* --ok-bg is as light as the pick's tile, so on the pick's column the
+   best value's wash takes a little more green to stay visible, and its
+   text a little ink to stay at 4.5:1 on it (tokens.test.ts checks). */
+.b-compare td.best.is-pick .b-cell-v { background: color-mix(in oklab, var(--ok) 14%, var(--tile)); color: color-mix(in oklab, var(--ok) 75%, var(--ink)); }
+
+.b-verdict { display: flex; align-items: flex-start; gap: var(--s2); padding: var(--s3) var(--s4); border-top: 1px solid var(--line-strong); font: 500 var(--t-small) var(--font); color: var(--ink); text-wrap: pretty; }
+.b-verdict svg.i { flex: none; margin-top: 1px; color: var(--text-2); }
+
+/* ---------- narrow: a card per option ---------- */
+.b-cmp-narrow { display: none; list-style: none; margin: 0; padding: 0; }
+.b-cmp-narrow > li { padding: var(--s3) var(--s4); border-top: 1px solid var(--line); }
+.b-cmp-narrow > li:first-child { border-top: 0; }
+.b-cmp-narrow > li.is-pick { background: var(--tile); }
+.b-cmp-item { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: var(--s2); row-gap: var(--s1); margin-bottom: var(--s2); }
+.b-cmp-item .b-cmp-name { font: 600 var(--t-body) var(--font); letter-spacing: var(--tr-body); }
+.b-cmp-item .b-cmp-price { margin: 0; }
+.b-cmp-item .b-pick { margin: 0 0 0 auto; align-self: center; }
+.b-cmp-narrow dl { margin: 0; display: flex; flex-direction: column; gap: var(--s1); }
+.b-cmp-narrow dl > div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3); font: 400 var(--t-small) var(--font); }
+.b-cmp-narrow dt { color: var(--text-3); }
+.b-cmp-narrow dd { margin: 0; display: inline-flex; align-items: center; gap: var(--s1); color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+.b-cmp-narrow .best dd { color: var(--ok); font-weight: 600; }
+
+@container blocks (max-width: 439px) {
+  .b-cmp-wide { display: none; }
+  .b-cmp-narrow { display: block; }
+}

@@ -1,0 +1,26 @@
+/* The chrome's gallery page (development only): overlays drawn in place,
+   so every sheet, the menu, the palette and the toasts can be seen side by
+   side at each width. */
+
+.g-chrome .scrim { display: none; }
+.g-chrome .g-row { display: flex; flex-wrap: wrap; gap: var(--s6); align-items: flex-start; }
+.g-chrome .g-cap { margin: 0 0 var(--s2); font: 500 var(--t-micro) var(--font); color: var(--text-3); }
+
+.g-head { position: relative; height: var(--header-h); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg); overflow: hidden; }
+.g-head + .g-cap { margin-top: var(--s4); }
+
+.g-menu { width: 300px; max-width: 100%; }
+.g-menu .menu.account-menu { position: relative; inset: auto; animation: none; }
+
+.g-toasts .toasts { position: static; transform: none; width: 100%; max-width: 420px; }
+
+.g-palette .palette { position: relative; top: auto; left: auto; right: auto; width: 100%; max-width: 560px; height: 440px; margin: 0; animation: none; }
+
+.sheet.sheet-inline { position: relative; inset: auto; z-index: auto; width: 100%; max-width: 520px; height: 720px; animation: none; }
+.g-chrome .g-stack { display: flex; flex-direction: column; gap: var(--s6); }
+/* A phone's Settings is the whole screen: framed here so it reads as one. */
+.g-chrome .settings.settings-inline { border: 1px solid var(--line); border-radius: var(--r-lg); }
+.g-pane { max-width: 728px; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
+
+.g-frame-box { position: relative; height: 720px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--bg); }
+.g-frame-box.short { height: 560px; }

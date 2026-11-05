@@ -1,0 +1,16 @@
+/* The ask gallery's own frames. Development only; never in the app. */
+
+/* The exchange column's width, which the app sets on .app. */
+.log-inner.ask-g-col { max-width: 680px; margin: 0 0 var(--s4); }
+
+/* A short app, so the dock and the composer sit where they would. */
+.app.ask-g-app { height: 420px; min-height: 0; max-width: 1080px; border: 1px solid var(--line); border-radius: var(--r-lg); }
+.ask-g-ctx { margin: 0; padding: var(--s6) var(--gutter); max-width: 520px; font: 400 var(--t-small) var(--font); color: var(--text-3); }
+
+/* Each receipt in a strip like the composer's top edge. */
+.ask-g-receipts { display: flex; flex-direction: column; gap: var(--s3); max-width: 680px; }
+.ask-g-receipt { overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); }
+.ask-g-receipt .receipt { border-bottom: 0; }
+
+.ask-g-pills { display: flex; gap: var(--s3); }
+.ask-g-pills .conn-pill { margin-left: 0; }
